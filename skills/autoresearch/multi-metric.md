@@ -59,7 +59,7 @@ After each experiment run, extract ALL metrics:
 
 1. Primary metric: `<primary extract command>`
 2. For each secondary metric: `<secondary extract command>`
-3. If a secondary extract command fails (empty output), record `N/A` for that metric — don't treat it as a crash unless the primary also failed
+3. If a secondary extract command fails (empty output), record `N/A` for that metric — `N/A` passes all constraints (benefit of doubt). Don't treat it as a crash unless the primary also failed
 
 ## Keep/Discard Decision (Extended)
 
@@ -88,16 +88,7 @@ If the experiment is being discarded on primary metric BUT significantly improve
 
 ## Constraint Syntax
 
-Supported constraint operators:
-
-| Syntax | Meaning |
-|--------|---------|
-| `< N` | Must be strictly less than N |
-| `> N` | Must be strictly greater than N |
-| `<= N` | Must be less than or equal to N |
-| `>= N` | Must be greater than or equal to N |
-
-If the user gives an ambiguous constraint (e.g., "memory should stay reasonable"), ask them to specify a numeric threshold.
+Supported operators: `<`, `>`, `<=`, `>=` followed by a numeric threshold. If the user gives an ambiguous constraint (e.g., "memory should stay reasonable"), ask for a specific number.
 
 ## Strategy Interaction
 

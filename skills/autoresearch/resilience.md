@@ -4,33 +4,12 @@ Guide for surviving context compression, session interruptions, and unexpected f
 
 ## Checkpoint File: `autoresearch-state.json`
 
-This file is your source of truth for loop state. Update it after EVERY experiment.
+Source of truth for loop state. Updated per the experiment loop in SKILL.md. Strategy notes format defined in `strategy-engine.md`.
 
-### Fields to update per experiment:
-
-- `last_kept_commit` — set to the new commit hash on each `keep`
-- `experiment_count` — increment by 1 every iteration
-
-### Fields to update every 10 experiments:
-
-- `strategy_notes` — append a summary object:
-  ```json
-  {
-    "at_experiment": 20,
-    "summary": "[param] batch sizes explored. [arch] reduced depth was biggest win. Next: [simplify] pass to remove dead code."
-  }
-  ```
-
-### Always include in git operations:
-
-When committing (whether keep or discard), always stage both tracking files:
+Always stage both tracking files in git operations:
 ```bash
 git add results.tsv autoresearch-state.json
-```
-
-When stashing before a hard reset:
-```bash
-git stash -- results.tsv autoresearch-state.json
+git stash -- results.tsv autoresearch-state.json  # before hard resets
 ```
 
 ## Context Compression Recovery

@@ -72,15 +72,6 @@ Before proposing an experiment:
 4. If it has: pick a different target or different category
 5. If all obvious targets in a category are exhausted: switch category
 
-Example — if `results.tsv` contains:
-```
-[param] halve batch size → keep
-[param] double learning rate → discard
-[param] halve learning rate → discard
-```
-
-Do NOT propose `[param] reduce learning rate by 25%` — the learning rate axis has been explored. Try a different parameter or switch to `[arch]`.
-
 ## Plateau Detection
 
 **Trigger:** 5 consecutive `discard` results.

@@ -39,21 +39,11 @@ Apply this code change: [EXACT description of what to change, including specific
 
 ## Report format
 End your response with EXACTLY this format (one line):
-RESULT: metric=[numeric value or CRASH] status=[keep/discard/crash] desc=[tag] [short description]
-
-Where:
-- metric = the numeric value from the extract command, or CRASH if it failed
-- status = keep if metric is better than [current best value] ([direction] is better), discard if equal/worse, crash if it failed
-- desc = category tag + short description (e.g., [param] double batch size)
-
-## Current best
-Metric: [current best value] ([direction] is better)
+RESULT: metric=[numeric value or CRASH] desc=[tag] [short description]
 
 ## Constraints
 - Do NOT propose different experiments — only apply the described change
 - Do NOT modify files not listed above
-- Do NOT install new dependencies
-- Do NOT use git add -A
 - Redirect ALL run output to run.log
 ```
 
@@ -80,30 +70,26 @@ If a worker's response doesn't contain a valid `RESULT:` line, treat it as a cra
 
 ### Step 5: Best-of-batch selection
 
-1. Filter out crashes and discards
-2. Among `keep` results, find the one with the best metric value
-3. If no results beat current best: record all as discards in `results.tsv`
-4. If one or more beat current best: the best one wins
+1. Parse `RESULT:` lines from all workers. Missing or unparseable = crash.
+2. Compare all reported metrics against current best
+3. If none beat current best: record all as discards in `results.tsv`
+4. If one or more beat current best: the best metric value wins
 
 ### Step 6: Apply the winner
 
 If there's a winner:
-1. Read the winning worker's worktree to see exactly what changed
+1. Read the winning worker's worktree to see exactly what changed (worktree persists if worker made changes)
 2. Apply the same change to your main branch mutable files
 3. `git add <mutable files> && git commit -m "experiment: [desc from worker]"`
-4. Run the experiment yourself to verify the metric matches
-5. If verified: record as `keep` in `results.tsv`, update `autoresearch-state.json`
-6. If metric doesn't match: record as `discard` (worker's isolated environment may have differed)
+4. Record as `keep` in `results.tsv`, update `autoresearch-state.json`
+
+If the worktree was cleaned up, reconstruct the change from the worker's description.
 
 Record ALL experiments (winners and losers) in `results.tsv` for anti-repeat tracking.
 
 ### Step 7: Repeat
 
 Go back to step 1 with the new state.
-
-## Why Best-of-Batch
-
-Parallel experiments diverge from the same base commit. You cannot safely merge two independent code changes — they may conflict or interact. Pick the single best, discard the rest, start the next batch from the new baseline.
 
 ## Failure Handling
 
