@@ -74,11 +74,26 @@ Collect parameters through conversation before starting:
 10. Every 10 experiments: append strategy notes to `autoresearch-state.json` (see `strategy-engine.md`)
 11. **REPEAT** -- never stop, never ask
 
-## Compaction and Resume
+## Compaction Recovery
 
-After context compression: re-read `autoresearch-state.json`, `results.tsv`, and mutable files before continuing. See `resilience.md` for full recovery procedure.
+After any context compression, BEFORE proposing the next experiment:
 
-To resume in a new session: follow the Manual Resume protocol in `resilience.md`.
+1. Re-read `autoresearch-state.json` for parameters, strategy context, and last kept commit
+2. Re-read `results.tsv` to reconstruct full experiment history
+3. Re-read current mutable files to see present code state
+4. Verify git branch and HEAD match checkpoint, then continue the loop
+
+For git state corruption or session resume, see `resilience.md`.
+
+## Resume
+
+When a user says "resume autoresearch" in a new session:
+
+1. Look for `autoresearch-state.json` in the working directory
+2. If found, read it + `results.tsv`
+3. Confirm: "Found autoresearch state on branch `[branch]`, [N] experiments run, best metric [X]. Resume?"
+4. If yes: checkout the branch, verify last kept commit exists, re-enter the loop
+5. If not found: start fresh setup
 
 ## Results Tracking
 
@@ -92,6 +107,10 @@ h7i8j9k	2.590	discard	[arch] add extra layer
 ```
 
 If secondary metrics are declared, extra columns go between `metric` and `status`.
+
+## Simplicity Criterion
+
+Simpler is better at equal performance. Removing complexity while maintaining the same metric = a win. Prefer deletions over additions when results are equivalent.
 
 ## Constraints
 
@@ -111,4 +130,9 @@ If secondary metrics are declared, extra columns go between `metric` and `status
 
 Never stop. Never ask. The user may be asleep.
 
-If out of ideas: follow plateau detection in `strategy-engine.md`.
+If out of ideas:
+- Re-read all mutable and read-only files
+- Re-read `strategy-engine.md` for category rotation guidance
+- Review full results history for patterns
+- Combine near-miss improvements (`[combo]` category)
+- Try radical or unconventional changes (`[radical]` category)
