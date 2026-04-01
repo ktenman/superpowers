@@ -1,5 +1,7 @@
 # Autoresearch v2 Design: Strategy, Parallelism, Resilience, Multi-Metric
 
+> **Supersedes** `2026-03-30-autoresearch-skill-design.md` for all new modules. The core ratchet pattern from v1 remains unchanged — v2 adds modules around it.
+
 ## Problem
 
 The current autoresearch skill (v1) works but has significant limitations:
@@ -72,6 +74,7 @@ Created alongside `results.tsv` during setup:
 
 ```json
 {
+  "schema_version": 2,
   "branch": "autoresearch/2026-04-01",
   "baseline_commit": "abc123",
   "last_kept_commit": "abc123",
@@ -99,15 +102,25 @@ This file is the resume anchor — if a user starts a new session and says "resu
 
 Experiments are proposed from categories tried in rotation, not randomly:
 
-1. **Hyperparameter sweeps** — systematic variation of numeric values found in code
-2. **Architectural changes** — add/remove/swap components (layers, algorithms, data structures)
-3. **Simplification** — delete code, reduce complexity while maintaining metric
-4. **Combination** — merge two near-miss improvements that individually didn't beat baseline
-5. **Radical** — try something unconventional when incremental changes plateau
+1. **`[param]` Numeric parameter sweeps** — systematic variation of numeric values, thresholds, or configuration constants
+2. **`[arch]` Structural changes** — add/remove/swap components, algorithms, data structures, or processing stages
+3. **`[simplify]` Simplification** — delete code, reduce complexity while maintaining metric
+4. **`[combo]` Combination** — merge two near-miss improvements that individually didn't beat baseline
+5. **`[radical]` Radical** — try something unconventional when incremental changes plateau
 
 ### Anti-Repeat Logic
 
-Before proposing an experiment, scan `results.tsv` descriptions for semantic similarity. If a proposed change closely matches a previous `discard` or `crash` entry, skip it and try something else. This prevents loops like "keep trying larger learning rate" after it already failed.
+Before proposing an experiment, check `results.tsv` for prior attempts at the same change. Each experiment description must include a category tag from the five categories:
+
+```
+[param] halve batch size
+[arch] remove attention layer
+[simplify] delete unused normalization
+[combo] merge reduced-depth + higher-lr
+[radical] switch optimizer to SGD
+```
+
+The anti-repeat check filters by category + key parameter name, not free-text similarity. This is robust across compaction boundaries where the model may lose nuanced context about what was tried.
 
 ### Plateau Detection
 
@@ -218,10 +231,12 @@ Cross-session resume is NOT automatic. Durable crons in Claude Code fire into ex
 
 If something goes wrong mid-loop (git state corrupted, branch deleted, unexpected files):
 
-1. Read `results.tsv` — find the last `keep` row
-2. Verify that commit exists: `git cat-file -t <hash>`
-3. If it exists: `git reset --hard <hash>`, restore `results.tsv` from stash, continue
-4. If it doesn't: alert the user — this requires manual intervention
+1. Read `autoresearch-state.json` for `last_kept_commit`
+2. Read `results.tsv` for full experiment history
+3. Verify that commit exists: `git cat-file -t <hash>`
+4. If it exists: `git stash -- results.tsv autoresearch-state.json`, then `git reset --hard <hash>`, then `git stash pop` to restore tracking files
+5. If the commit doesn't exist: alert the user — this requires manual intervention
+6. If tracking files are also missing: reconstruct from `git log --oneline` on the autoresearch branch, create fresh `results.tsv` from commit messages, and continue
 
 ## Multi-Metric (`multi-metric.md`)
 

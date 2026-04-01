@@ -28,7 +28,7 @@ Collect 6 parameters through conversation before starting:
 | **Read-only files** | Files to read for context but never modify | `prepare.py` |
 | **Run command** | How to execute one experiment | `uv run train.py` |
 | **Extract command** | Shell command that outputs a single numeric value | `grep "^val_bpb:" run.log \| awk '{print $2}'` |
-| **Time budget** | Expected wall-clock duration per experiment (kill at 2x) | 7 min |
+| **Time budget** | Expected wall-clock duration per experiment (kill at 2x) | 10 min |
 
 **Steps:**
 
