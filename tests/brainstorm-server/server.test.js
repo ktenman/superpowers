@@ -16,6 +16,7 @@ const path = require('path');
 const assert = require('assert');
 
 const SERVER_PATH = path.join(__dirname, '../../skills/brainstorming/scripts/server.cjs');
+const { getIdleTimeoutMs } = require(SERVER_PATH);
 const TEST_PORT = 3334;
 const TEST_DIR = '/tmp/brainstorm-test';
 const CONTENT_DIR = path.join(TEST_DIR, 'content');
@@ -112,6 +113,26 @@ async function runTests() {
       assert.strictEqual(info.port, TEST_PORT);
       assert.strictEqual(info.screen_dir, CONTENT_DIR, 'screen_dir should point to content/');
       assert.strictEqual(info.state_dir, STATE_DIR, 'state_dir should point to state/');
+      assert.strictEqual(info.idle_timeout_ms, 2 * 60 * 60 * 1000, 'should report default idle timeout');
+      return Promise.resolve();
+    });
+
+    await test('defaults idle timeout to 2 hours', () => {
+      assert.strictEqual(getIdleTimeoutMs(undefined), 2 * 60 * 60 * 1000);
+      assert.strictEqual(getIdleTimeoutMs(''), 2 * 60 * 60 * 1000);
+      return Promise.resolve();
+    });
+
+    await test('accepts positive BRAINSTORM_IDLE_TIMEOUT_MS values', () => {
+      assert.strictEqual(getIdleTimeoutMs('900000'), 900000);
+      assert.strictEqual(getIdleTimeoutMs('1'), 1);
+      return Promise.resolve();
+    });
+
+    await test('ignores invalid BRAINSTORM_IDLE_TIMEOUT_MS values', () => {
+      assert.strictEqual(getIdleTimeoutMs('0'), 2 * 60 * 60 * 1000);
+      assert.strictEqual(getIdleTimeoutMs('-1'), 2 * 60 * 60 * 1000);
+      assert.strictEqual(getIdleTimeoutMs('not-a-number'), 2 * 60 * 60 * 1000);
       return Promise.resolve();
     });
 
@@ -295,6 +316,53 @@ async function runTests() {
       ws.close();
     });
 
+    await test('handles JSON null from client without crashing', async () => {
+      // JSON.parse('null') yields null; reading .choice on null throws and,
+      // before the handleMessage guard, killed the server process.
+      const ws = new WebSocket(`ws://localhost:${TEST_PORT}`);
+      await new Promise(resolve => ws.on('open', resolve));
+
+      ws.send('null');
+      await sleep(300);
+
+      const res = await fetch(`http://localhost:${TEST_PORT}/`);
+      assert.strictEqual(res.status, 200, 'Server should still be running after JSON null');
+      ws.close();
+    });
+
+    await test('handles JSON primitive values from client without crashing', async () => {
+      // Numbers, strings, booleans are valid JSON top-level values. They
+      // should be ignored (no .choice, so no events file write) without
+      // throwing.
+      const ws = new WebSocket(`ws://localhost:${TEST_PORT}`);
+      await new Promise(resolve => ws.on('open', resolve));
+
+      ws.send('42');
+      ws.send('"hello"');
+      ws.send('true');
+      await sleep(300);
+
+      const res = await fetch(`http://localhost:${TEST_PORT}/`);
+      assert.strictEqual(res.status, 200, 'Server should still be running after primitive values');
+      ws.close();
+    });
+
+    await test('does NOT write events file for JSON null', async () => {
+      // Regression for the null guard: ensure null doesn't slip past the
+      // truthiness check and write a stray events file.
+      const eventsFile = path.join(STATE_DIR, 'events');
+      if (fs.existsSync(eventsFile)) fs.unlinkSync(eventsFile);
+
+      const ws = new WebSocket(`ws://localhost:${TEST_PORT}`);
+      await new Promise(resolve => ws.on('open', resolve));
+
+      ws.send('null');
+      await sleep(300);
+
+      assert(!fs.existsSync(eventsFile), 'state/events should not exist for null payload');
+      ws.close();
+    });
+
     // ========== File Watching ==========
     console.log('\n--- File Watching ---');
 
@@ -407,6 +475,19 @@ async function runTests() {
       assert(template.includes('indicator-text'), 'Should have indicator text');
       assert(template.includes('<!-- CONTENT -->'), 'Should have content placeholder');
       assert(template.includes('claude-content'), 'Should have content container');
+      return Promise.resolve();
+    });
+
+    // ========== start-server.sh Configuration ==========
+    console.log('\n--- start-server.sh Configuration ---');
+
+    await test('start-server.sh exposes idle timeout configuration', () => {
+      const script = fs.readFileSync(
+        path.join(__dirname, '../../skills/brainstorming/scripts/start-server.sh'), 'utf-8'
+      );
+      assert(script.includes('--idle-timeout-minutes'), 'Should document idle timeout flag');
+      assert(script.includes('IDLE_TIMEOUT_MINUTES'), 'Should parse timeout minutes');
+      assert(script.includes('BRAINSTORM_IDLE_TIMEOUT_MS'), 'Should pass timeout to server process');
       return Promise.resolve();
     });
 
