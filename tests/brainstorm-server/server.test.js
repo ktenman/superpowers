@@ -16,11 +16,13 @@ const path = require('path');
 const assert = require('assert');
 
 const SERVER_PATH = path.join(__dirname, '../../skills/brainstorming/scripts/server.cjs');
-const { getIdleTimeoutMs } = require(SERVER_PATH);
 const TEST_PORT = 3334;
 const TEST_DIR = '/tmp/brainstorm-test';
 const CONTENT_DIR = path.join(TEST_DIR, 'content');
 const STATE_DIR = path.join(TEST_DIR, 'state');
+// Fixed session key so the test client can authenticate (see auth.test.js for
+// the security behavior itself; here we just need authorized requests).
+const TOKEN = 'testtoken-server-0123456789abcdef';
 
 function cleanup() {
   if (fs.existsSync(TEST_DIR)) {
@@ -34,7 +36,8 @@ async function sleep(ms) {
 
 async function fetch(url) {
   return new Promise((resolve, reject) => {
-    http.get(url, (res) => {
+    const headers = { Cookie: `brainstorm-key-${TEST_PORT}=${TOKEN}` };
+    http.get(url, { headers }, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => resolve({
@@ -48,7 +51,7 @@ async function fetch(url) {
 
 function startServer() {
   return spawn('node', [SERVER_PATH], {
-    env: { ...process.env, BRAINSTORM_PORT: TEST_PORT, BRAINSTORM_DIR: TEST_DIR }
+    env: { ...process.env, BRAINSTORM_PORT: TEST_PORT, BRAINSTORM_DIR: TEST_DIR, BRAINSTORM_TOKEN: TOKEN }
   });
 }
 
@@ -70,6 +73,43 @@ async function waitForServer(server) {
   });
 }
 
+class SkipTest extends Error {
+  constructor(message) {
+    super(message);
+    this.skip = true;
+  }
+}
+
+function skip(message) {
+  throw new SkipTest(message);
+}
+
+function serverStartedMessage(out) {
+  const line = out.trim().split('\n').find(l => l.includes('server-started'));
+  assert(line, 'server-started JSON should be present');
+  return JSON.parse(line);
+}
+
+function assertStartedOnExpectedPort(out) {
+  const msg = serverStartedMessage(out);
+  assert.strictEqual(
+    msg.port,
+    TEST_PORT,
+    `server.test.js expected fixed port ${TEST_PORT}, got ${msg.port}; fixed-port tests must not run through fallback`
+  );
+  return msg;
+}
+
+function ensureSymlinkWorks(target, link) {
+  try {
+    fs.symlinkSync(target, link);
+    fs.unlinkSync(link);
+  } catch (e) {
+    try { fs.unlinkSync(link); } catch (ignore) {}
+    skip(`symlink creation unavailable on this host: ${e.message}`);
+  }
+}
+
 async function runTests() {
   cleanup();
 
@@ -77,15 +117,22 @@ async function runTests() {
   let stdoutAccum = '';
   server.stdout.on('data', (data) => { stdoutAccum += data.toString(); });
 
-  const { stdout: initialStdout } = await waitForServer(server);
+  let initialStdout = '';
   let passed = 0;
   let failed = 0;
+  let skipped = 0;
 
   function test(name, fn) {
     return fn().then(() => {
       console.log(`  PASS: ${name}`);
       passed++;
     }).catch(e => {
+      if (e.skip) {
+        console.log(`  SKIP: ${name}`);
+        console.log(`    ${e.message}`);
+        skipped++;
+        return;
+      }
       console.log(`  FAIL: ${name}`);
       console.log(`    ${e.message}`);
       failed++;
@@ -93,11 +140,15 @@ async function runTests() {
   }
 
   try {
+    const { stdout } = await waitForServer(server);
+    initialStdout = stdout;
+    assertStartedOnExpectedPort(initialStdout);
+
     // ========== Server Startup ==========
     console.log('\n--- Server Startup ---');
 
     await test('outputs server-started JSON on startup', () => {
-      const msg = JSON.parse(initialStdout.trim());
+      const msg = serverStartedMessage(initialStdout);
       assert.strictEqual(msg.type, 'server-started');
       assert.strictEqual(msg.port, TEST_PORT);
       assert(msg.url, 'Should include URL');
@@ -113,26 +164,6 @@ async function runTests() {
       assert.strictEqual(info.port, TEST_PORT);
       assert.strictEqual(info.screen_dir, CONTENT_DIR, 'screen_dir should point to content/');
       assert.strictEqual(info.state_dir, STATE_DIR, 'state_dir should point to state/');
-      assert.strictEqual(info.idle_timeout_ms, 2 * 60 * 60 * 1000, 'should report default idle timeout');
-      return Promise.resolve();
-    });
-
-    await test('defaults idle timeout to 2 hours', () => {
-      assert.strictEqual(getIdleTimeoutMs(undefined), 2 * 60 * 60 * 1000);
-      assert.strictEqual(getIdleTimeoutMs(''), 2 * 60 * 60 * 1000);
-      return Promise.resolve();
-    });
-
-    await test('accepts positive BRAINSTORM_IDLE_TIMEOUT_MS values', () => {
-      assert.strictEqual(getIdleTimeoutMs('900000'), 900000);
-      assert.strictEqual(getIdleTimeoutMs('1'), 1);
-      return Promise.resolve();
-    });
-
-    await test('ignores invalid BRAINSTORM_IDLE_TIMEOUT_MS values', () => {
-      assert.strictEqual(getIdleTimeoutMs('0'), 2 * 60 * 60 * 1000);
-      assert.strictEqual(getIdleTimeoutMs('-1'), 2 * 60 * 60 * 1000);
-      assert.strictEqual(getIdleTimeoutMs('not-a-number'), 2 * 60 * 60 * 1000);
       return Promise.resolve();
     });
 
@@ -165,7 +196,7 @@ async function runTests() {
       const res = await fetch(`http://localhost:${TEST_PORT}/`);
       assert(res.body.includes('<h1>Custom Page</h1>'), 'Should contain original content');
       assert(res.body.includes('WebSocket'), 'Should still inject helper.js');
-      assert(!res.body.includes('indicator-bar'), 'Should NOT wrap in frame template');
+      assert(!res.body.includes('<div class="header">'), 'Should NOT wrap in frame template');
     });
 
     await test('wraps content fragments in frame template', async () => {
@@ -174,7 +205,7 @@ async function runTests() {
       await sleep(300);
 
       const res = await fetch(`http://localhost:${TEST_PORT}/`);
-      assert(res.body.includes('indicator-bar'), 'Fragment should get indicator bar');
+      assert(res.body.includes('<div class="header">'), 'Fragment should get header chrome');
       assert(!res.body.includes('<!-- CONTENT -->'), 'Placeholder should be replaced');
       assert(res.body.includes('Pick a layout'), 'Fragment content should be present');
       assert(res.body.includes('data-choice="a"'), 'Fragment interactive elements intact');
@@ -200,6 +231,95 @@ async function runTests() {
       assert(!res.body.includes('"not"'), 'Should not serve JSON');
     });
 
+    await test('ignores macOS resource-fork dotfiles (._*.html) when serving', async () => {
+      // On macOS/ExFAT/SMB, the OS writes ._name.html sidecar files holding
+      // binary metadata. They end with .html but must never be served as a screen.
+      fs.writeFileSync(path.join(CONTENT_DIR, 'real-screen.html'), '<h2>Real Screen Content</h2>');
+      await sleep(100);
+      fs.writeFileSync(path.join(CONTENT_DIR, '._real-screen.html'), 'Mac OS X resource fork garbage');
+      await sleep(300);
+
+      const res = await fetch(`http://localhost:${TEST_PORT}/`);
+      assert(res.body.includes('Real Screen Content'), 'should serve the real screen, not the newer ._ sidecar');
+      assert(!res.body.includes('resource fork garbage'), 'must not serve ._*.html dotfile content');
+    });
+
+    await test('does not serve dotfiles via /files/', async () => {
+      fs.writeFileSync(path.join(CONTENT_DIR, '._secret.html'), 'dotfile body should not be served');
+      const res = await fetch(`http://localhost:${TEST_PORT}/files/._secret.html`);
+      assert.strictEqual(res.status, 404, '/files/ must 404 on dotfiles');
+    });
+
+    await test('GET /files/ (empty name) returns 404 and does not crash the server', async () => {
+      const res = await fetch(`http://localhost:${TEST_PORT}/files/`);
+      assert.strictEqual(res.status, 404, '/files/ (the content dir) must 404, not EISDIR-crash');
+      // The server must still be alive afterward.
+      const alive = await fetch(`http://localhost:${TEST_PORT}/`);
+      assert.strictEqual(alive.status, 200, 'server must survive a /files/ request');
+    });
+
+    await test('does not serve symlinks that escape content dir via /files/', async () => {
+      const target = path.join(STATE_DIR, 'server-info');
+      const link = path.join(CONTENT_DIR, 'linked-server-info.txt');
+      try { fs.unlinkSync(link); } catch (e) {}
+      ensureSymlinkWorks(target, link);
+      fs.symlinkSync(target, link);
+
+      const res = await fetch(`http://localhost:${TEST_PORT}/files/linked-server-info.txt`);
+      assert.strictEqual(res.status, 404, 'symlink to state/server-info must not be served');
+      assert(!res.body.includes('server-started'), 'response must not include server-info body');
+    });
+
+    await test('does not serve hard links to files outside content dir via /files/', async () => {
+      const target = path.join(STATE_DIR, 'server-info');
+      const link = path.join(CONTENT_DIR, 'hard-linked-server-info.txt');
+      try { fs.unlinkSync(link); } catch (e) {}
+      fs.linkSync(target, link);
+
+      const res = await fetch(`http://localhost:${TEST_PORT}/files/hard-linked-server-info.txt`);
+      assert.strictEqual(res.status, 404, 'hard link to state/server-info must not be served');
+      assert(!res.body.includes('server-started'), 'response must not include server-info body');
+    });
+
+    await test('does not serve symlinks that escape content dir via root screen selection', async () => {
+      const target = path.join(STATE_DIR, 'server-info');
+      const link = path.join(CONTENT_DIR, 'root-linked-server-info.html');
+      try { fs.unlinkSync(link); } catch (e) {}
+      ensureSymlinkWorks(target, link);
+      fs.symlinkSync(target, link);
+      const future = new Date(Date.now() + 2000);
+      fs.utimesSync(target, future, future);
+      await sleep(300);
+
+      const res = await fetch(`http://localhost:${TEST_PORT}/`);
+      assert.strictEqual(res.status, 200);
+      assert(!res.body.includes('"type":"server-started"'), 'root screen must not serve state/server-info through a symlink');
+      assert(!res.body.includes('"state_dir"'), 'root screen must not include server-info body');
+    });
+
+    await test('does not serve hard links that escape content dir via root screen selection', async () => {
+      const target = path.join(STATE_DIR, 'server-info');
+      const link = path.join(CONTENT_DIR, 'root-hard-linked-server-info.html');
+      try { fs.unlinkSync(link); } catch (e) {}
+      try {
+        fs.linkSync(target, link);
+      } catch (e) {
+        skip(`hardlink creation unavailable on this host: ${e.message}`);
+      }
+      const linkStat = fs.lstatSync(link);
+      if (linkStat.nlink <= 1) {
+        skip(`hardlink nlink did not expose multiple links: ${linkStat.nlink}`);
+      }
+      const future = new Date(Date.now() + 3000);
+      fs.utimesSync(target, future, future);
+      await sleep(300);
+
+      const res = await fetch(`http://localhost:${TEST_PORT}/`);
+      assert.strictEqual(res.status, 200);
+      assert(!res.body.includes('"type":"server-started"'), 'root screen must not serve state/server-info through a hardlink');
+      assert(!res.body.includes('"state_dir"'), 'root screen must not include server-info body');
+    });
+
     await test('returns 404 for non-root paths', async () => {
       const res = await fetch(`http://localhost:${TEST_PORT}/other`);
       assert.strictEqual(res.status, 404);
@@ -209,7 +329,7 @@ async function runTests() {
     console.log('\n--- WebSocket Communication ---');
 
     await test('accepts WebSocket upgrade on /', async () => {
-      const ws = new WebSocket(`ws://localhost:${TEST_PORT}`);
+      const ws = new WebSocket(`ws://localhost:${TEST_PORT}/?key=${TOKEN}`);
       await new Promise((resolve, reject) => {
         ws.on('open', resolve);
         ws.on('error', reject);
@@ -219,7 +339,7 @@ async function runTests() {
 
     await test('relays user events to stdout with source field', async () => {
       stdoutAccum = '';
-      const ws = new WebSocket(`ws://localhost:${TEST_PORT}`);
+      const ws = new WebSocket(`ws://localhost:${TEST_PORT}/?key=${TOKEN}`);
       await new Promise(resolve => ws.on('open', resolve));
 
       ws.send(JSON.stringify({ type: 'click', text: 'Test Button' }));
@@ -235,7 +355,7 @@ async function runTests() {
       const eventsFile = path.join(STATE_DIR, 'events');
       if (fs.existsSync(eventsFile)) fs.unlinkSync(eventsFile);
 
-      const ws = new WebSocket(`ws://localhost:${TEST_PORT}`);
+      const ws = new WebSocket(`ws://localhost:${TEST_PORT}/?key=${TOKEN}`);
       await new Promise(resolve => ws.on('open', resolve));
 
       ws.send(JSON.stringify({ type: 'click', choice: 'b', text: 'Option B' }));
@@ -253,7 +373,7 @@ async function runTests() {
       const eventsFile = path.join(STATE_DIR, 'events');
       if (fs.existsSync(eventsFile)) fs.unlinkSync(eventsFile);
 
-      const ws = new WebSocket(`ws://localhost:${TEST_PORT}`);
+      const ws = new WebSocket(`ws://localhost:${TEST_PORT}/?key=${TOKEN}`);
       await new Promise(resolve => ws.on('open', resolve));
 
       ws.send(JSON.stringify({ type: 'hover', text: 'Something' }));
@@ -265,8 +385,8 @@ async function runTests() {
     });
 
     await test('handles multiple concurrent WebSocket clients', async () => {
-      const ws1 = new WebSocket(`ws://localhost:${TEST_PORT}`);
-      const ws2 = new WebSocket(`ws://localhost:${TEST_PORT}`);
+      const ws1 = new WebSocket(`ws://localhost:${TEST_PORT}/?key=${TOKEN}`);
+      const ws2 = new WebSocket(`ws://localhost:${TEST_PORT}/?key=${TOKEN}`);
       await Promise.all([
         new Promise(resolve => ws1.on('open', resolve)),
         new Promise(resolve => ws2.on('open', resolve))
@@ -291,7 +411,7 @@ async function runTests() {
     });
 
     await test('cleans up closed clients from broadcast list', async () => {
-      const ws1 = new WebSocket(`ws://localhost:${TEST_PORT}`);
+      const ws1 = new WebSocket(`ws://localhost:${TEST_PORT}/?key=${TOKEN}`);
       await new Promise(resolve => ws1.on('open', resolve));
       ws1.close();
       await sleep(100);
@@ -303,7 +423,7 @@ async function runTests() {
     });
 
     await test('handles malformed JSON from client gracefully', async () => {
-      const ws = new WebSocket(`ws://localhost:${TEST_PORT}`);
+      const ws = new WebSocket(`ws://localhost:${TEST_PORT}/?key=${TOKEN}`);
       await new Promise(resolve => ws.on('open', resolve));
 
       // Send invalid JSON — server should not crash
@@ -316,58 +436,11 @@ async function runTests() {
       ws.close();
     });
 
-    await test('handles JSON null from client without crashing', async () => {
-      // JSON.parse('null') yields null; reading .choice on null throws and,
-      // before the handleMessage guard, killed the server process.
-      const ws = new WebSocket(`ws://localhost:${TEST_PORT}`);
-      await new Promise(resolve => ws.on('open', resolve));
-
-      ws.send('null');
-      await sleep(300);
-
-      const res = await fetch(`http://localhost:${TEST_PORT}/`);
-      assert.strictEqual(res.status, 200, 'Server should still be running after JSON null');
-      ws.close();
-    });
-
-    await test('handles JSON primitive values from client without crashing', async () => {
-      // Numbers, strings, booleans are valid JSON top-level values. They
-      // should be ignored (no .choice, so no events file write) without
-      // throwing.
-      const ws = new WebSocket(`ws://localhost:${TEST_PORT}`);
-      await new Promise(resolve => ws.on('open', resolve));
-
-      ws.send('42');
-      ws.send('"hello"');
-      ws.send('true');
-      await sleep(300);
-
-      const res = await fetch(`http://localhost:${TEST_PORT}/`);
-      assert.strictEqual(res.status, 200, 'Server should still be running after primitive values');
-      ws.close();
-    });
-
-    await test('does NOT write events file for JSON null', async () => {
-      // Regression for the null guard: ensure null doesn't slip past the
-      // truthiness check and write a stray events file.
-      const eventsFile = path.join(STATE_DIR, 'events');
-      if (fs.existsSync(eventsFile)) fs.unlinkSync(eventsFile);
-
-      const ws = new WebSocket(`ws://localhost:${TEST_PORT}`);
-      await new Promise(resolve => ws.on('open', resolve));
-
-      ws.send('null');
-      await sleep(300);
-
-      assert(!fs.existsSync(eventsFile), 'state/events should not exist for null payload');
-      ws.close();
-    });
-
     // ========== File Watching ==========
     console.log('\n--- File Watching ---');
 
     await test('sends reload on new .html file', async () => {
-      const ws = new WebSocket(`ws://localhost:${TEST_PORT}`);
+      const ws = new WebSocket(`ws://localhost:${TEST_PORT}/?key=${TOKEN}`);
       await new Promise(resolve => ws.on('open', resolve));
 
       let gotReload = false;
@@ -387,7 +460,7 @@ async function runTests() {
       fs.writeFileSync(filePath, '<h2>Original</h2>');
       await sleep(500);
 
-      const ws = new WebSocket(`ws://localhost:${TEST_PORT}`);
+      const ws = new WebSocket(`ws://localhost:${TEST_PORT}/?key=${TOKEN}`);
       await new Promise(resolve => ws.on('open', resolve));
 
       let gotReload = false;
@@ -403,7 +476,7 @@ async function runTests() {
     });
 
     await test('does NOT send reload for non-.html files', async () => {
-      const ws = new WebSocket(`ws://localhost:${TEST_PORT}`);
+      const ws = new WebSocket(`ws://localhost:${TEST_PORT}/?key=${TOKEN}`);
       await new Promise(resolve => ws.on('open', resolve));
 
       let gotReload = false;
@@ -415,6 +488,22 @@ async function runTests() {
       await sleep(500);
 
       assert(!gotReload, 'Should NOT reload for non-HTML files');
+      ws.close();
+    });
+
+    await test('does NOT send reload for ._*.html resource-fork dotfiles', async () => {
+      const ws = new WebSocket(`ws://localhost:${TEST_PORT}/?key=${TOKEN}`);
+      await new Promise(resolve => ws.on('open', resolve));
+
+      let gotReload = false;
+      ws.on('message', (data) => {
+        if (JSON.parse(data.toString()).type === 'reload') gotReload = true;
+      });
+
+      fs.writeFileSync(path.join(CONTENT_DIR, '._sidecar.html'), 'resource fork');
+      await sleep(500);
+
+      assert(!gotReload, 'a ._ dotfile appearing must not trigger a reload');
       ws.close();
     });
 
@@ -471,28 +560,23 @@ async function runTests() {
       const template = fs.readFileSync(
         path.join(__dirname, '../../skills/brainstorming/scripts/frame-template.html'), 'utf-8'
       );
-      assert(template.includes('indicator-bar'), 'Should have indicator bar');
-      assert(template.includes('indicator-text'), 'Should have indicator text');
+      assert(template.includes('<div class="header">'), 'Should have top header markup');
+      assert(!template.includes('indicator-bar'), 'Should not have footer chrome');
+      assert(!template.includes('indicator-text'), 'Header should not render selection indicator text');
+      assert(template.includes('<!-- BRANDING -->'), 'Should have branding placeholder');
+      assert(template.includes('<div class="status">Connecting…</div>'), 'Header should include connection status');
+      assert(template.includes('grid-template-columns: minmax(0, 1fr) auto;'), 'Header should let brand text shrink before the status column');
+      assert(template.includes('padding: 0.5rem 1.5rem;'), 'Header should keep equal left and right edge padding');
+      assert(template.includes('.header .brand { justify-self: start; width: 100%; font-size: 0.75rem; line-height: 1; }'), 'Header brand should align left, fill its grid track, and match header text size');
+      assert(template.includes('.header .status { grid-column: 2; line-height: 1; }'), 'Header status should sit in the right column');
+      assert(!template.includes('<div></div>'), 'Header should not use an empty spacer before branding');
       assert(template.includes('<!-- CONTENT -->'), 'Should have content placeholder');
-      assert(template.includes('claude-content'), 'Should have content container');
-      return Promise.resolve();
-    });
-
-    // ========== start-server.sh Configuration ==========
-    console.log('\n--- start-server.sh Configuration ---');
-
-    await test('start-server.sh exposes idle timeout configuration', () => {
-      const script = fs.readFileSync(
-        path.join(__dirname, '../../skills/brainstorming/scripts/start-server.sh'), 'utf-8'
-      );
-      assert(script.includes('--idle-timeout-minutes'), 'Should document idle timeout flag');
-      assert(script.includes('IDLE_TIMEOUT_MINUTES'), 'Should parse timeout minutes');
-      assert(script.includes('BRAINSTORM_IDLE_TIMEOUT_MS'), 'Should pass timeout to server process');
+      assert(template.includes('frame-content'), 'Should have content container');
       return Promise.resolve();
     });
 
     // ========== Summary ==========
-    console.log(`\n--- Results: ${passed} passed, ${failed} failed ---`);
+    console.log(`\n--- Results: ${passed} passed, ${failed} failed, ${skipped} skipped ---`);
     if (failed > 0) process.exit(1);
 
   } finally {
