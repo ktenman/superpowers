@@ -4,6 +4,12 @@
 .superpowers/
 .DS_Store
 node_modules/
+__pycache__/
+
+# AKIT lexicon mirror: built locally by `skills/akit-lookup/akit.py update`.
+# AKIT content is © Cybernetica AS and is not redistributed with this repo.
+skills/akit-lookup/akit_raw.jsonl.gz
+skills/akit-lookup/akit.jsonl
 inspo
 triage/
 
