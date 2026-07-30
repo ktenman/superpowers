@@ -1,0 +1,132 @@
+name: Sync upstream release
+
+# Weekly check for a new obra/superpowers release. Clean merge -> open a PR.
+# Conflicts, or any fork-only file disappearing -> report and touch nothing.
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+env:
+  UPSTREAM: obra/superpowers
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Is upstream ahead of us?
+        id: rel
+        run: |
+          tag=$(gh release view --repo "$UPSTREAM" --json tagName -q .tagName)
+          echo "Latest upstream release: $tag"
+          git remote add upstream "https://github.com/$UPSTREAM.git"
+          # --force: the fork already carries upstream's older tags, and a stale
+          # local tag of the same name would silently get merged instead.
+          git fetch --quiet --force --tags upstream
+
+          if git merge-base --is-ancestor "$tag" HEAD; then
+            echo "Already contains $tag; nothing to sync."
+            exit 0
+          fi
+
+          # Either of these means a human has already seen this release, so don't
+          # nag weekly. --state all counts "closed without syncing" as an answer.
+          # --repo is not optional: on a fork, bare gh resolves to the PARENT, so
+          # this would count obra/superpowers' PRs and never sync anything.
+          # Issues are disabled on forks by default, hence the `|| echo 0`.
+          seen=$(gh pr list --repo "$GITHUB_REPOSITORY" --state all --search "$tag in:title" --json number -q length)
+          seen=$((seen + $(gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "$tag in:title" --json number -q length 2>/dev/null || echo 0)))
+          if [ "$seen" -gt 0 ]; then
+            echo "Already handled ($seen reference(s)); nothing to do."
+            exit 0
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "branch=sync-upstream-$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Attempt the merge
+        id: merge
+        if: steps.rel.outputs.tag
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+          BRANCH: ${{ steps.rel.outputs.branch }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          base=$(git merge-base HEAD "$TAG")
+          pre=$(git rev-parse HEAD)
+          git switch -c "$BRANCH"
+
+          if ! git merge --no-edit "$TAG"; then
+            git diff --name-only --diff-filter=U > detail.txt
+            git merge --abort
+            echo "why=Merging \`$TAG\` conflicts in these files:" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # A merge never deletes a file that only ever existed on this fork, so
+          # if one vanished, something is wrong -- stop rather than ship a PR that
+          # silently drops our own skills. A path present in the merge base is
+          # upstream heritage, so upstream retiring it is legitimate.
+          : > detail.txt
+          for f in $(git diff --name-only --diff-filter=D "$pre" HEAD); do
+            git cat-file -e "$base:$f" 2>/dev/null || echo "$f" >> detail.txt
+          done
+          if [ -s detail.txt ]; then
+            echo "why=**Merging \`$TAG\` would delete these fork-only files:**" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "clean=true" >> "$GITHUB_OUTPUT"
+
+      - name: Open the sync PR
+        if: steps.merge.outputs.clean
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+          BRANCH: ${{ steps.rel.outputs.branch }}
+        run: |
+          git push -u origin "$BRANCH"
+          # --repo, again: without it gh would offer this branch to the upstream repo.
+          gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+            --title "Sync upstream $TAG" \
+            --body "Merged [\`$TAG\`](https://github.com/$UPSTREAM/releases/tag/$TAG) cleanly, and no fork-only file was removed.
+
+          Opened by \`.github/workflows/sync-upstream.yml\`. A clean merge is not a
+          working one — run the test suites before merging."
+
+      - name: Otherwise, ask a human
+        if: steps.merge.outputs.why
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+          WHY: ${{ steps.merge.outputs.why }}
+        run: |
+          body="$WHY
+
+          $(sed 's/^/- /' detail.txt)
+
+          Nothing was pushed. Sync by hand and this goes quiet for $TAG:
+
+          \`\`\`
+          git remote add upstream https://github.com/$UPSTREAM.git
+          git fetch --force --tags upstream
+          git switch -c sync-upstream-$TAG && git merge $TAG
+          \`\`\`"
+
+          # An issue is the better artifact -- it also silences next Monday's run.
+          # Forks ship with issues disabled, so fall back to failing the job: a
+          # failed scheduled run emails the repo owner and needs no repo setting.
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "Sync upstream $TAG needs a human" --body "$body" || {
+            echo "$body" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
