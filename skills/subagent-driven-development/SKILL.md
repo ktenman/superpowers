@@ -129,8 +129,9 @@ a ledger file, not only in todos.
 - Check for this plan's ledger at `<workspace>/progress.md`. If its first
   line names your plan file, tasks with a `Task <N>: complete` line are DONE
   — do not re-dispatch them; resume at the first task without one. A task
-  whose last line is a fix round is mid-loop: resume the loop at the next
-  round. A ledger whose first line names a different plan file — or a stray
+  whose last line is a simplify or fix round is mid-task and its
+  implementation is already committed: resume at the next step, never at the
+  implementer. A ledger whose first line names a different plan file — or a stray
   ledger at the old flat path `.superpowers/sdd/progress.md` — is another
   plan's progress: leave it in place and start your own, fresh.
 - Create the ledger with its identity as the first line:
@@ -169,25 +170,21 @@ The final whole-branch review is one of these — dispatch it deliberately,
 never on the session default. See Frontier tier below.
 
 **Frontier tier.** When the lineup carries a model above your usual top tier
-(today, Claude Fable), the final whole-branch review goes there: it is the
-last gate before merge, and the one review whose misses ship. Nothing else in
-the loop earns it — per-task reviews, simplify passes, re-reviews, and fix
-rounds stay at their tiers. Know three things before dispatching. Safety
-classifiers can refuse a security-shaped diff, and a refusal arrives as an
-empty or truncated report rather than an error — treat an empty final review
-as a failed dispatch and re-run it one tier down, never as a clean verdict.
-Turns run long. And the tier may require data retention your organization
-does not permit. When it is unavailable, the most capable available model is
-the floor.
+(today, Claude Fable), the final whole-branch review goes there and nothing
+else does — it is the last gate before merge, the one review whose misses
+ship. A safety classifier can refuse a security-shaped diff, and the refusal
+arrives as an empty or truncated report rather than an error: treat an empty
+final review as a failed dispatch and re-run it one tier down, never as a
+clean verdict. When the tier is unavailable — data retention, latency — the
+most capable model you can reach is the floor.
 
 **Review tasks**: choose the model with the same judgment, scaled to the
 diff's size, complexity, and risk. A small mechanical diff does not need the
 most capable model; a subtle concurrency change does. Scoped re-reviews of
 small fix diffs take a cheap-to-mid tier.
 
-**The simplify pass**: judgment work over one small diff — mid-tier. It reads
-the same package the reviewer will read and does not need a larger model than
-the reviewer that follows it.
+**The simplify pass**: judgment work over one small diff — mid-tier, never
+above the reviewer that follows it.
 
 **Fix-loop escalation (rounds 4-5)**: use a model at least one tier above
 the implementer that got stuck.
@@ -253,7 +250,7 @@ Template: [implementer-prompt.md](implementer-prompt.md)
 
 Implementer subagents report one of four statuses. Handle each appropriately:
 
-**DONE:** Generate the review package (`scripts/review-package PLAN_FILE BASE HEAD`, from this skill's directory — it prints the unique file path it wrote; BASE is the commit you recorded before dispatching the implementer — never `HEAD~1`, which silently drops all but the last commit of a multi-commit task), then dispatch the simplify pass with the printed path.
+**DONE:** Dispatch the simplify pass with the BASE you recorded before dispatching the implementer and the implementer's HEAD.
 
 **DONE_WITH_CONCERNS:** The implementer completed the work but flagged doubts. Read the concerns before proceeding. If the concerns are about correctness or scope, address them before review. If they're observations (e.g., "this file is getting large"), note them and proceed to review.
 
@@ -274,30 +271,22 @@ rush it into implementation.
 ### 3. Simplify the diff
 
 One simplifier subagent per task, between the implementer's report and the
-task review. It reads the same brief, report, and review package the reviewer
-will read, cuts what the task did not need, re-runs the tests covering what it
-touched, and commits. The task review that follows is what vets its diff —
-that is why the pass runs before the review and never after.
+task review. It cuts what the task did not need and commits. The task review
+that follows is what vets its diff.
 
-- The simplifier deletes and consolidates. It does not add features, add
-  abstractions, rename, reformat, or change behavior. A simplify diff that
-  touches everything is not reviewable.
-- The brief is its floor. If it believes the brief itself mandates
-  over-engineering, that reaches you as a line in its report and through the
-  review — not as a deletion it makes on its own.
+The simplifier writes to the worktree, so it reads the code directly — it gets
+BASE and HEAD, not a review package. The package is generated once, in step 4,
+after the simplifier has committed, so it spans the implementation and the
+simplification as one diff.
+
 - Statuses: **SIMPLIFIED** (a commit the reviewer will see), **NO_CHANGES**
-  (the diff was already minimal — reuse the package you already generated and
-  go straight to review), **BLOCKED** (the suite was red on arrival — that is
-  an implementer problem; route it as one).
-- After a SIMPLIFIED, run `scripts/review-package PLAN_FILE BASE HEAD` again
-  with the same BASE, so the reviewer's package spans the implementation and
-  the simplification as one diff. The reviewer judges the code that will merge,
-  not an intermediate state.
+  (the diff was already minimal), **BLOCKED** (the suite was red on arrival
+  and reverting the cuts does not fix it — that is an implementer problem;
+  route it as one).
 - Ledger: `Task <N>: simplified (<net line change>, commit <sha7>)`, or
   `Task <N>: simplify — no changes`.
-- The pass runs once, before the review. It never runs inside the fix loop: a
-  simplifier and a fixer taking turns on the same code is how an addressed
-  finding comes back.
+- The pass never runs inside the fix loop: a simplifier and a fixer taking
+  turns on the same code is how an addressed finding comes back.
 
 Template: [simplifier-prompt.md](simplifier-prompt.md)
 
@@ -480,7 +469,7 @@ Use superpowers:finishing-a-development-branch.
 | "The reviewer will just find something new anyway" | Scoped re-reviews verify fixes; they cannot wander. New findings on untouched code go to the ledger, not the loop. |
 | "This finding is obviously wrong, I'll drop it" | You adjudicate only at the cap, and every ruling is a ledger entry. Silent discards are forbidden. |
 | "The fix was small, skip the re-review" | Unreviewed fixes are how regressions land. Every round ends with a scoped re-review. |
-| "This diff already looks clean, skip the simplify pass" | You are guessing at what a fresh reader would cut, from the report rather than the code. The pass is one mid-tier dispatch and its own answer is NO_CHANGES. |
+| "This diff already looks clean, skip the simplify pass" | You are guessing at what a fresh reader would cut, from the report rather than the code. NO_CHANGES is the pass's own answer to that, and it is not yours to give. |
 | "Reviews slow the loop down" | The loop without reviews is just unverified churn. Reviews are the loop's brakes and steering. |
 | "Ledger bookkeeping is overhead" | The ledger is what survives compaction. Controllers without one have re-dispatched entire completed task sequences. |
 
@@ -508,12 +497,12 @@ Implementer: [Later]
   - Self-review: Found I missed --force flag, added it
   - Committed
 
-[Run review-package PLAN_FILE BASE HEAD; dispatch simplifier with the printed path]
+[Dispatch simplifier with BASE and the implementer's HEAD]
 Simplifier: SIMPLIFIED (c3d4e5f). Dropped HookPathResolver — one caller,
   inlined to two lines. -41 / +2. 5/5 passing, output pristine.
 
 [Ledger: Task 1: simplified (-41/+2, commit c3d4e5f)]
-[Re-run review-package PLAN_FILE BASE HEAD; dispatch task reviewer with the printed path]
+[Run review-package PLAN_FILE BASE HEAD; dispatch task reviewer with the printed path]
 Task reviewer: Spec ✅ - all requirements met, nothing extra.
   Strengths: Good test coverage, clean. Issues: None. Task quality: Approved.
 
@@ -528,12 +517,12 @@ Implementer: [No questions]
   - 8/8 tests passing
   - Committed
 
-[Run review-package PLAN_FILE BASE HEAD; dispatch simplifier with the printed path]
+[Dispatch simplifier with BASE and the implementer's HEAD]
 Simplifier: NO_CHANGES. Nothing to cut — no duplication, no single-caller
   abstractions, error paths all reachable.
 
 [Ledger: Task 2: simplify — no changes]
-[Same package, no re-run needed; dispatch task reviewer with that path]
+[Run review-package PLAN_FILE BASE HEAD; dispatch task reviewer with the printed path]
 Task reviewer: Spec ❌:
   - Missing: Progress reporting (spec says "report every 100 items")
   Issues (Important): Magic number (100)
