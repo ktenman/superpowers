@@ -5,11 +5,11 @@ description: Use when executing implementation plans with independent tasks in t
 
 # Subagent-Driven Development
 
-Execute plan by dispatching a fresh implementer subagent per task, a task review (spec compliance + code quality) after each, and a broad whole-branch review at the end.
+Execute plan by dispatching a fresh implementer subagent per task, a simplify pass and a task review (spec compliance + code quality) after each, and a broad whole-branch review at the end.
 
 **Why subagents:** You delegate tasks to specialized agents with isolated context. By precisely crafting their instructions and context, you ensure they stay focused and succeed at their task. They should never inherit your session's context or history — you construct exactly what they need. This also preserves your own context for coordination work.
 
-**Core principle:** Fresh subagent per task + task review (spec + quality) + broad final review = high quality, fast iteration
+**Core principle:** Fresh subagent per task + simplify pass + task review (spec + quality) + broad final review = high quality, fast iteration
 
 **Narration:** between tool calls, narrate at most one short line — the
 ledger and the tool results carry the record.
@@ -54,6 +54,7 @@ digraph process {
         "Implementer asks questions?" [shape=diamond];
         "Answer questions, provide context" [shape=box];
         "Implementer implements, tests, commits, self-reviews" [shape=box];
+        "Dispatch simplifier (./simplifier-prompt.md)" [shape=box];
         "Generate review package, dispatch task reviewer (./task-reviewer-prompt.md)" [shape=box];
         "Spec ✅ and quality approved?" [shape=diamond];
         "Finding conflicts with plan text?" [shape=diamond];
@@ -81,7 +82,8 @@ digraph process {
     "Implementer asks questions?" -> "Answer questions, provide context" [label="yes"];
     "Answer questions, provide context" -> "Implementer implements, tests, commits, self-reviews";
     "Implementer asks questions?" -> "Implementer implements, tests, commits, self-reviews" [label="no"];
-    "Implementer implements, tests, commits, self-reviews" -> "Generate review package, dispatch task reviewer (./task-reviewer-prompt.md)";
+    "Implementer implements, tests, commits, self-reviews" -> "Dispatch simplifier (./simplifier-prompt.md)";
+    "Dispatch simplifier (./simplifier-prompt.md)" -> "Generate review package, dispatch task reviewer (./task-reviewer-prompt.md)";
     "Generate review package, dispatch task reviewer (./task-reviewer-prompt.md)" -> "Spec ✅ and quality approved?";
     "Spec ✅ and quality approved?" -> "Append completion to ledger, mark todo complete" [label="yes"];
     "Spec ✅ and quality approved?" -> "Finding conflicts with plan text?" [label="no"];
@@ -163,13 +165,29 @@ Use the least powerful model that can handle each role to conserve cost and incr
 **Integration and judgment tasks** (multi-file coordination, pattern matching, debugging): use a standard model.
 
 **Architecture and design tasks**: use the most capable available model.
-The final whole-branch review is one of these — dispatch it on the most
-capable available model, not the session default.
+The final whole-branch review is one of these — dispatch it deliberately,
+never on the session default. See Frontier tier below.
+
+**Frontier tier.** When the lineup carries a model above your usual top tier
+(today, Claude Fable), the final whole-branch review goes there: it is the
+last gate before merge, and the one review whose misses ship. Nothing else in
+the loop earns it — per-task reviews, simplify passes, re-reviews, and fix
+rounds stay at their tiers. Know three things before dispatching. Safety
+classifiers can refuse a security-shaped diff, and a refusal arrives as an
+empty or truncated report rather than an error — treat an empty final review
+as a failed dispatch and re-run it one tier down, never as a clean verdict.
+Turns run long. And the tier may require data retention your organization
+does not permit. When it is unavailable, the most capable available model is
+the floor.
 
 **Review tasks**: choose the model with the same judgment, scaled to the
 diff's size, complexity, and risk. A small mechanical diff does not need the
 most capable model; a subtle concurrency change does. Scoped re-reviews of
 small fix diffs take a cheap-to-mid tier.
+
+**The simplify pass**: judgment work over one small diff — mid-tier. It reads
+the same package the reviewer will read and does not need a larger model than
+the reviewer that follows it.
 
 **Fix-loop escalation (rounds 4-5)**: use a model at least one tier above
 the implementer that got stuck.
@@ -235,7 +253,7 @@ Template: [implementer-prompt.md](implementer-prompt.md)
 
 Implementer subagents report one of four statuses. Handle each appropriately:
 
-**DONE:** Generate the review package (`scripts/review-package PLAN_FILE BASE HEAD`, from this skill's directory — it prints the unique file path it wrote; BASE is the commit you recorded before dispatching the implementer — never `HEAD~1`, which silently drops all but the last commit of a multi-commit task), then dispatch the task reviewer with the printed path.
+**DONE:** Generate the review package (`scripts/review-package PLAN_FILE BASE HEAD`, from this skill's directory — it prints the unique file path it wrote; BASE is the commit you recorded before dispatching the implementer — never `HEAD~1`, which silently drops all but the last commit of a multi-commit task), then dispatch the simplify pass with the printed path.
 
 **DONE_WITH_CONCERNS:** The implementer completed the work but flagged doubts. Read the concerns before proceeding. If the concerns are about correctness or scope, address them before review. If they're observations (e.g., "this file is getting large"), note them and proceed to review.
 
@@ -253,7 +271,37 @@ If the implementer asks questions — before starting or mid-task — answer
 clearly and completely, provide additional context if needed, and don't
 rush it into implementation.
 
-### 3. Review the task
+### 3. Simplify the diff
+
+One simplifier subagent per task, between the implementer's report and the
+task review. It reads the same brief, report, and review package the reviewer
+will read, cuts what the task did not need, re-runs the tests covering what it
+touched, and commits. The task review that follows is what vets its diff —
+that is why the pass runs before the review and never after.
+
+- The simplifier deletes and consolidates. It does not add features, add
+  abstractions, rename, reformat, or change behavior. A simplify diff that
+  touches everything is not reviewable.
+- The brief is its floor. If it believes the brief itself mandates
+  over-engineering, that reaches you as a line in its report and through the
+  review — not as a deletion it makes on its own.
+- Statuses: **SIMPLIFIED** (a commit the reviewer will see), **NO_CHANGES**
+  (the diff was already minimal — reuse the package you already generated and
+  go straight to review), **BLOCKED** (the suite was red on arrival — that is
+  an implementer problem; route it as one).
+- After a SIMPLIFIED, run `scripts/review-package PLAN_FILE BASE HEAD` again
+  with the same BASE, so the reviewer's package spans the implementation and
+  the simplification as one diff. The reviewer judges the code that will merge,
+  not an intermediate state.
+- Ledger: `Task <N>: simplified (<net line change>, commit <sha7>)`, or
+  `Task <N>: simplify — no changes`.
+- The pass runs once, before the review. It never runs inside the fix loop: a
+  simplifier and a fixer taking turns on the same code is how an addressed
+  finding comes back.
+
+Template: [simplifier-prompt.md](simplifier-prompt.md)
+
+### 4. Review the task
 
 Per-task reviews are task-scoped gates. The broad review happens once, at the
 final whole-branch review. Never skip the task review, and never accept a
@@ -299,7 +347,7 @@ review — it enters the fix loop with the other findings.
 
 Template: [task-reviewer-prompt.md](task-reviewer-prompt.md)
 
-### 4. The fix loop
+### 5. The fix loop
 
 The loop triggers when the review reports spec ❌, any Critical or Important
 finding, or a ⚠️ item you confirmed as a real gap.
@@ -374,7 +422,7 @@ Adjudicate only at the cap. Adjudicating earlier to end a loop is
 pre-judging with a different name. Every adjudication is a ledger entry —
 a silent discard is forbidden.
 
-### 5. Complete the task
+### 6. Complete the task
 
 When the review comes back clean — or every open finding is parked with a
 ruling at the cap — append the completion line to the ledger in the same
@@ -395,7 +443,7 @@ The final whole-branch review gets a package too: run
 branch started from, e.g. `git merge-base main HEAD`) and include the
 printed path in the final review dispatch, so the final reviewer reads
 one file instead of re-deriving the branch diff with git commands. Dispatch
-on the most capable available model (see Model Selection), using
+on the frontier tier (see Model Selection), using
 superpowers:requesting-code-review's
 [code-reviewer.md](../requesting-code-review/code-reviewer.md). Point it at
 the ledger's deferred-minor and parked lines so it can triage which must be
@@ -432,6 +480,7 @@ Use superpowers:finishing-a-development-branch.
 | "The reviewer will just find something new anyway" | Scoped re-reviews verify fixes; they cannot wander. New findings on untouched code go to the ledger, not the loop. |
 | "This finding is obviously wrong, I'll drop it" | You adjudicate only at the cap, and every ruling is a ledger entry. Silent discards are forbidden. |
 | "The fix was small, skip the re-review" | Unreviewed fixes are how regressions land. Every round ends with a scoped re-review. |
+| "This diff already looks clean, skip the simplify pass" | You are guessing at what a fresh reader would cut, from the report rather than the code. The pass is one mid-tier dispatch and its own answer is NO_CHANGES. |
 | "Reviews slow the loop down" | The loop without reviews is just unverified churn. Reviews are the loop's brakes and steering. |
 | "Ledger bookkeeping is overhead" | The ledger is what survives compaction. Controllers without one have re-dispatched entire completed task sequences. |
 
@@ -459,7 +508,12 @@ Implementer: [Later]
   - Self-review: Found I missed --force flag, added it
   - Committed
 
-[Run review-package PLAN_FILE BASE HEAD; dispatch task reviewer with the printed path]
+[Run review-package PLAN_FILE BASE HEAD; dispatch simplifier with the printed path]
+Simplifier: SIMPLIFIED (c3d4e5f). Dropped HookPathResolver — one caller,
+  inlined to two lines. -41 / +2. 5/5 passing, output pristine.
+
+[Ledger: Task 1: simplified (-41/+2, commit c3d4e5f)]
+[Re-run review-package PLAN_FILE BASE HEAD; dispatch task reviewer with the printed path]
 Task reviewer: Spec ✅ - all requirements met, nothing extra.
   Strengths: Good test coverage, clean. Issues: None. Task quality: Approved.
 
@@ -474,7 +528,12 @@ Implementer: [No questions]
   - 8/8 tests passing
   - Committed
 
-[Run review-package PLAN_FILE BASE HEAD; dispatch task reviewer with the printed path]
+[Run review-package PLAN_FILE BASE HEAD; dispatch simplifier with the printed path]
+Simplifier: NO_CHANGES. Nothing to cut — no duplication, no single-caller
+  abstractions, error paths all reachable.
+
+[Ledger: Task 2: simplify — no changes]
+[Same package, no re-run needed; dispatch task reviewer with that path]
 Task reviewer: Spec ❌:
   - Missing: Progress reporting (spec says "report every 100 items")
   Issues (Important): Magic number (100)
@@ -494,7 +553,7 @@ Re-reviewer: Missing progress reporting — ADDRESSED (src/recovery.js:41).
 ...
 
 [After all tasks]
-[Run review-package PLAN_FILE MERGE_BASE HEAD; dispatch final code-reviewer, most capable model]
+[Run review-package PLAN_FILE MERGE_BASE HEAD; dispatch final code-reviewer, frontier tier]
 Final reviewer: All requirements met. Deferred minors triaged: none block merge.
 
 [Delete this plan's workspace — the record now lives in git]
