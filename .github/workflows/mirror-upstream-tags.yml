@@ -1,0 +1,31 @@
+name: Mirror upstream tags
+
+# After every push to main, push each obra/superpowers release tag that main now
+# contains, so the fork's tags stay in step with upstream's. Never overwrites: a
+# tag name already on the fork is left alone whatever it points at.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  tags:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - run: |
+          git remote add upstream https://github.com/obra/superpowers.git
+          git fetch --quiet --force --tags upstream
+          missing=$(comm -23 <(git tag -l 'v*' --merged HEAD | sort) \
+                             <(git ls-remote --tags --refs origin 'v*' | sed 's|.*refs/tags/||' | sort))
+          if [ -z "$missing" ]; then
+            echo "Tags already in sync."
+            exit 0
+          fi
+          echo "$missing" | sed 's|^|refs/tags/|' | xargs git push origin
