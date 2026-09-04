@@ -1,6 +1,7 @@
 name: Sync upstream release
 
-# Weekly check for a new obra/superpowers release. Clean merge -> open a PR.
+# Weekly check for a new obra/superpowers release. Clean merge -> run the
+# offline test suites and open a PR that names the files both sides changed.
 # Conflicts, or any fork-only file disappearing -> report and touch nothing.
 on:
   schedule:
@@ -68,7 +69,7 @@ jobs:
           git switch -c "$BRANCH"
 
           if ! git merge --no-edit "$TAG"; then
-            git diff --name-only --diff-filter=U > detail.txt
+            git diff --name-only --diff-filter=U > "$RUNNER_TEMP/detail.txt"
             git merge --abort
             echo "why=Merging \`$TAG\` conflicts in these files:" >> "$GITHUB_OUTPUT"
             exit 0
@@ -78,31 +79,61 @@ jobs:
           # if one vanished, something is wrong -- stop rather than ship a PR that
           # silently drops our own skills. A path present in the merge base is
           # upstream heritage, so upstream retiring it is legitimate.
-          : > detail.txt
+          : > "$RUNNER_TEMP/detail.txt"
           for f in $(git diff --name-only --diff-filter=D "$pre" HEAD); do
-            git cat-file -e "$base:$f" 2>/dev/null || echo "$f" >> detail.txt
+            git cat-file -e "$base:$f" 2>/dev/null || echo "$f" >> "$RUNNER_TEMP/detail.txt"
           done
-          if [ -s detail.txt ]; then
+          if [ -s "$RUNNER_TEMP/detail.txt" ]; then
             echo "why=**Merging \`$TAG\` would delete these fork-only files:**" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          # Files both sides changed since the merge base. Git merged them without
+          # conflict, but a clean merge can still break the fork's edits, so the
+          # PR names them for a human read.
+          comm -12 <(git diff --name-only "$base" "$pre" | sort) \
+                   <(git diff --name-only "$base" "$TAG" | sort) > "$RUNNER_TEMP/overlap.txt"
+
           echo "clean=true" >> "$GITHUB_OUTPUT"
+
+      - name: Run the offline test suites
+        id: tests
+        if: steps.merge.outputs.clean
+        run: |
+          pipx install pytest
+          npm ci --prefix tests/brainstorm-server --no-audit --no-fund
+          command -v dot >/dev/null || sudo apt-get install -y --no-install-recommends graphviz
+          if tests/run-offline-tests.sh; then
+            echo "result=passed" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=FAILED" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Open the sync PR
         if: steps.merge.outputs.clean
         env:
           TAG: ${{ steps.rel.outputs.tag }}
           BRANCH: ${{ steps.rel.outputs.branch }}
+          TESTS: ${{ steps.tests.outputs.result }}
         run: |
           git push -u origin "$BRANCH"
+          if [ -s "$RUNNER_TEMP/overlap.txt" ]; then
+            overlap="Upstream also changed these files the fork has modified. Git merged them cleanly, but read each merged result by hand — a clean merge can still break the fork's edits:
+
+          $(sed 's/^/- /' "$RUNNER_TEMP/overlap.txt")"
+          else
+            overlap="Upstream touched no file the fork has modified."
+          fi
           # --repo, again: without it gh would offer this branch to the upstream repo.
           gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
             --title "Sync upstream $TAG" \
             --body "Merged [\`$TAG\`](https://github.com/$UPSTREAM/releases/tag/$TAG) cleanly, and no fork-only file was removed.
 
-          Opened by \`.github/workflows/sync-upstream.yml\`. A clean merge is not a
-          working one — run the test suites before merging."
+          $overlap
+
+          Offline test suites: **$TESTS** ([run log]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)). The agent-driven suites are not run here.
+
+          Opened by \`.github/workflows/sync-upstream.yml\`."
 
       - name: Otherwise, ask a human
         if: steps.merge.outputs.why
@@ -112,7 +143,7 @@ jobs:
         run: |
           body="$WHY
 
-          $(sed 's/^/- /' detail.txt)
+          $(sed 's/^/- /' "$RUNNER_TEMP/detail.txt")
 
           Nothing was pushed. Sync by hand and this goes quiet for $TAG:
 
