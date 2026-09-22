@@ -33,6 +33,8 @@ suites=(
   "bash tests/version-bump/test-bump-version.sh"
   "bash tests/writing-skills/test-render-graphs.sh"
   "node --test tests/pi/test-pi-extension.mjs"
+  "node --test tests/installer/test-install.mjs"
+  "node --test tests/upstream-sync/test-sync-upstream.mjs"
   "npm test --prefix tests/brainstorm-server"
   "pytest -q tests/hermes"
   "scripts/bump-version.sh --check"
