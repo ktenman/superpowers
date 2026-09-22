@@ -229,7 +229,12 @@ test('Claude skips an enabled local directory install without touching it', t =>
   assertReadOnly(result.calls);
 });
 
-for (const [state, plugins] of [['disabled', [{ ...claudePlugin, enabled: false }]], ['not installed', []]]) {
+for (const [state, plugins] of [
+  ['disabled', [{ ...claudePlugin, enabled: false }]],
+  ['not installed', []],
+  // Claude 2.1.280 keeps a moved checkout's plugin enabled and reports the load error.
+  ['failing to load', [{ ...claudePlugin, errors: ['Marketplace superpowers-dev failed to load: cache-miss'] }]],
+]) {
   test(`Claude refuses a local directory install whose plugin is ${state}`, t => {
     const commands = claudeState(claudeDirectory);
     commands['plugin list --json'] = { json: plugins };

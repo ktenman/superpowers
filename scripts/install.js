@@ -76,8 +76,9 @@ function installClaude(ref) {
   const existing = marketplaces.find(m => m.name === marketplace);
   const installed = installedPlugin();
   // Claude loads a directory marketplace in place, so an enabled plugin from a
-  // local checkout already has its skills. Leave that registration alone.
-  if (existing?.source === 'directory' && installed?.enabled) {
+  // local checkout that loads without errors already has its skills. Leave that
+  // registration alone.
+  if (existing?.source === 'directory' && installed?.enabled && !installed.errors?.length) {
     console.log(`claude: skipped (${marketplace} is a local directory marketplace at ${existing.path}; Claude loads the skills live from that checkout, not from ${repository}#${ref}). ${migration('claude', marketplace, id)}`);
     return;
   }
