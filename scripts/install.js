@@ -48,9 +48,15 @@ function migration(cli, marketplace, id) {
   return `To migrate, review the existing registration and explicitly remove it and its installed plugin(s):\n${commands}\nThen rerun the installer. These commands are not run automatically.`;
 }
 
+function describe(source) {
+  const location = source?.url ?? source?.repo ?? source?.path;
+  if (!location) return JSON.stringify(source) ?? 'no source';
+  return `${source.source} ${location}${source.ref ? `#${source.ref}` : ''}`;
+}
+
 function requireFork(cli, marketplace, id, source, ref) {
   if (!['git', 'github'].includes(source?.source) || !forkSource(source.url ?? source.repo) || source.ref !== ref) {
-    throw new Error(`Marketplace ${marketplace} does not match ${repository}#${ref}. ${migration(cli, marketplace, id)}`);
+    throw new Error(`Marketplace ${marketplace} does not match ${repository}#${ref} (found ${describe(source)}). ${migration(cli, marketplace, id)}`);
   }
 }
 
@@ -69,6 +75,13 @@ function installClaude(ref) {
   const installedPlugin = () => array(command('claude', ['plugin', 'list', '--json']), 'claude plugins').find(p => p.id === id && p.scope === 'user');
   const existing = marketplaces.find(m => m.name === marketplace);
   const installed = installedPlugin();
+  // Claude loads a directory marketplace in place, so an enabled plugin from a
+  // local checkout that loads without errors already has its skills. Leave that
+  // registration alone.
+  if (existing?.source === 'directory' && installed?.enabled && !installed.errors?.length) {
+    console.log(`claude: skipped (${marketplace} is a local directory marketplace at ${existing.path}; Claude loads the skills live from that checkout, not from ${repository}#${ref}). ${migration('claude', marketplace, id)}`);
+    return;
+  }
   if (existing) {
     requireFork('claude', marketplace, id, existing, ref);
     command('claude', ['plugin', 'marketplace', 'update', marketplace]);
@@ -87,7 +100,7 @@ function installCodex(ref) {
   const existing = marketplaces.find(m => m.name === marketplace);
   const installed = installedPlugin();
   if (existing && (existing.marketplaceSource?.sourceType !== 'git' || !forkSource(existing.marketplaceSource?.source))) {
-    throw new Error(`Marketplace ${marketplace} does not match ${repository}. ${migration('codex', marketplace, id)}`);
+    throw new Error(`Marketplace ${marketplace} does not match ${repository} (found ${existing.marketplaceSource?.sourceType} ${existing.marketplaceSource?.source}). ${migration('codex', marketplace, id)}`);
   }
   // list omits the ref. Native add verifies the complete registration and
   // refuses a different ref without changing it; an identical add is a no-op.
