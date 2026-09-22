@@ -13,8 +13,10 @@ Both commands install the **remote fork's `main` branch**, independent of the
 checkout's current branch. Native plugin installation includes the fork-only
 `autoresearch`, `ai-checker` and `akit-lookup` skills.
 
-Run the same command again to update. Missing CLIs are skipped; no available CLI,
-failed discovery, an incompatible registration or an update failure exits 1.
+Run the same command again to update. Missing CLIs and an enabled local Claude
+checkout (see [Existing local installations](#existing-local-installations)) are
+skipped; no available CLI, failed discovery, an incompatible registration or an
+update failure exits 1.
 Failures in one CLI do not prevent attempts in the others. Completed steps stay
 in place, so rerun after fixing the reported failure. Disabled plugins stay
 disabled. Restart the harness after an update.
@@ -59,9 +61,13 @@ running an agent session still requires the harness's authentication.
 ## Existing local installations
 
 A directory marketplace named `superpowers-dev` points at the live checkout in
-Claude Code. The installer deliberately refuses to replace it. Keep it if that
-development behavior is wanted. To switch to the remote fork, review the current
-registration and explicitly remove it before rerunning:
+Claude Code. The installer deliberately refuses to replace it. With the plugin
+enabled, Claude already loads the skills from that checkout, so the installer
+reports `claude: skipped` with the checkout path and exits 0 unless another CLI
+fails. With the plugin disabled or not installed, the registration fails like
+any other incompatible source. Keep it if that development behavior is wanted.
+To switch to the remote fork, review the current registration and explicitly
+remove it before rerunning:
 
 ```sh
 claude plugin marketplace list --json

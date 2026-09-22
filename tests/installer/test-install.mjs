@@ -133,6 +133,7 @@ test('Copilot refuses a different ref even when list reports the right repositor
   settings.extraKnownMarketplaces['superpowers-dev'].source.ref = 'dev';
   const result = run(t, { copilot: copilotState() }, { settings });
   assert.equal(result.status, 1, result.output);
+  assert.ok(result.output.includes('found github ktenman/superpowers#dev'), result.output);
   assert.match(result.output, /copilot plugin marketplace remove superpowers-dev --force/);
   assertReadOnly(result.calls);
 });
@@ -204,15 +205,37 @@ function codexState(plugin = codexPlugin) {
   };
 }
 
-for (const marketplace of [
-  { name: 'superpowers-dev', source: 'directory', path: '/local/checkout' },
-  { ...claudeMarketplace, url: 'https://github.com/obra/superpowers.git' },
-  { ...claudeMarketplace, ref: 'another-branch' },
+for (const [marketplace, found] of [
+  [{ ...claudeMarketplace, url: 'https://github.com/obra/superpowers.git' }, 'git https://github.com/obra/superpowers.git#main'],
+  [{ ...claudeMarketplace, ref: 'another-branch' }, 'git https://github.com/ktenman/superpowers.git#another-branch'],
 ]) {
   test(`Claude refuses a conflicting source/ref: ${JSON.stringify(marketplace)}`, t => {
     const result = run(t, { claude: claudeState(marketplace) });
     assert.equal(result.status, 1, result.output);
+    assert.ok(result.output.includes(`found ${found}`), result.output);
     assert.match(result.output, /claude plugin marketplace remove superpowers-dev/);
+    assertReadOnly(result.calls);
+  });
+}
+
+// scripts/install.sh registered the checkout itself; Claude loads it in place.
+const claudeDirectory = { name: 'superpowers-dev', source: 'directory', path: '/local/checkout', installLocation: '/local/checkout' };
+
+test('Claude skips an enabled local directory install without touching it', t => {
+  const result = run(t, { claude: claudeState(claudeDirectory) });
+  assert.equal(result.status, 0, result.output);
+  assert.match(result.output, /claude: skipped \(.*\/local\/checkout/);
+  assert.match(result.output, /claude plugin marketplace remove superpowers-dev/);
+  assertReadOnly(result.calls);
+});
+
+for (const [state, plugins] of [['disabled', [{ ...claudePlugin, enabled: false }]], ['not installed', []]]) {
+  test(`Claude refuses a local directory install whose plugin is ${state}`, t => {
+    const commands = claudeState(claudeDirectory);
+    commands['plugin list --json'] = { json: plugins };
+    const result = run(t, { claude: commands });
+    assert.equal(result.status, 1, result.output);
+    assert.ok(result.output.includes('found directory /local/checkout'), result.output);
     assertReadOnly(result.calls);
   });
 }
@@ -229,6 +252,18 @@ test('Codex rerun refreshes a disabled plugin without repeating plugin add', t =
   assert.equal(result.status, 0, result.output);
   assert.match(result.output, /codex: updated.*disabled/);
   assert.ok(!result.calls.some(c => c[1] === 'plugin' && c[2] === 'add'));
+});
+
+test('Codex refuses a local marketplace and names it', t => {
+  const commands = codexState();
+  commands['plugin marketplace list --json'] = { json: { marketplaces: [
+    { name: 'superpowers-dev', root: '/local/checkout', marketplaceSource: { sourceType: 'local', source: '/local/checkout' } },
+  ] } };
+  const result = run(t, { codex: commands });
+  assert.equal(result.status, 1, result.output);
+  assert.ok(result.output.includes('found local /local/checkout'), result.output);
+  assert.match(result.output, /codex plugin remove superpowers@superpowers-dev[\s\S]*codex plugin marketplace remove superpowers-dev/);
+  assertReadOnly(result.calls);
 });
 
 test('Codex native ref conflict stops before refresh and suggests explicit migration', t => {
