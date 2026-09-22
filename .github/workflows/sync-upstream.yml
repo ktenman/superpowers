@@ -2,7 +2,9 @@ name: Sync upstream release
 
 # Weekly check for a new obra/superpowers release. Clean merge -> run the
 # offline test suites and open a PR that names the files both sides changed.
-# Conflicts, or any fork-only file disappearing -> report and touch nothing.
+# Resolve Claude version-omission conflicts only when the fork has no other
+# edits to those manifests or the version registry. Other conflicts, or any
+# fork-only file disappearing -> report without pushing.
 on:
   schedule:
     - cron: "0 6 * * 1" # Mondays 06:00 UTC
@@ -70,9 +72,13 @@ jobs:
 
           if ! git merge --no-edit "$TAG"; then
             git diff --name-only --diff-filter=U > "$RUNNER_TEMP/detail.txt"
-            git merge --abort
-            echo "why=Merging \`$TAG\` conflicts in these files:" >> "$GITHUB_OUTPUT"
-            exit 0
+            if node scripts/resolve-upstream-versions.cjs; then
+              git commit --no-edit --cleanup=strip
+            else
+              git merge --abort
+              echo "why=Merging \`$TAG\` conflicts in these files:" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
 
           # A merge never deletes a file that only ever existed on this fork, so
@@ -118,7 +124,7 @@ jobs:
         run: |
           git push -u origin "$BRANCH"
           if [ -s "$RUNNER_TEMP/overlap.txt" ]; then
-            overlap="Upstream also changed these files the fork has modified. Git merged them cleanly, but read each merged result by hand — a clean merge can still break the fork's edits:
+            overlap="Upstream also changed these files the fork has modified. Read each merged result by hand, including any automatic resolution of Claude version omissions:
 
           $(sed 's/^/- /' "$RUNNER_TEMP/overlap.txt")"
           else
@@ -127,7 +133,7 @@ jobs:
           # --repo, again: without it gh would offer this branch to the upstream repo.
           gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
             --title "Sync upstream $TAG" \
-            --body "Merged [\`$TAG\`](https://github.com/$UPSTREAM/releases/tag/$TAG) cleanly, and no fork-only file was removed.
+            --body "Merged [\`$TAG\`](https://github.com/$UPSTREAM/releases/tag/$TAG), preserving the fork's Claude version omissions. No fork-only file was removed.
 
           $overlap
 

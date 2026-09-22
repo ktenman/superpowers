@@ -4,6 +4,9 @@
   "description": "Superpowers skills and runtime bootstrap for coding agents",
   "type": "module",
   "main": ".opencode/plugins/superpowers.js",
+  "bin": {
+    "superpowers-install": "scripts/install.js"
+  },
   "keywords": [
     "pi-package",
     "skills",

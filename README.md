@@ -51,6 +51,14 @@ If you're using Superpowers in enterprise and could benefit from commercial supp
 
 ## Installation
 
+To install or update this fork in every Claude Code, Codex and GitHub Copilot CLI on your PATH (requires Node.js and Git):
+
+```sh
+npx github:ktenman/superpowers
+```
+
+Rerun it to update. `--ref BRANCH_OR_TAG` installs another branch or tag; see [docs/fork-install.md](docs/fork-install.md) to migrate an existing installation. The per-harness instructions below install upstream [obra/superpowers](https://github.com/obra/superpowers) instead.
+
 Installation differs by harness. If you use more than one, install Superpowers separately for each one.
 
 ### Claude Code
