@@ -57,10 +57,10 @@ case "$0" in
   */*|*\\*) SCRIPT_DIR="$(cd "${0%[/\\]*}" && pwd)" ;;
   *) SCRIPT_DIR="$(pwd)" ;;
 esac
+SCRIPT_NAME="$1"
 # Bash derives $BASH from argv[0]. When this shebang-less file is exec'd
 # without a shell, libc's sh fallback on macOS keeps the caller's argv[0], so
 # $BASH names this file and exec'ing it would re-run this script forever.
 [ "${BASH:-}" -ef "$0" ] && BASH=bash
-SCRIPT_NAME="$1"
 shift
 exec "${BASH:-bash}" "${SCRIPT_DIR}/${SCRIPT_NAME}" "$@"
