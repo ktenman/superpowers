@@ -6,9 +6,18 @@
 # `npm ci --prefix tests/brainstorm-server` for the brainstorm-server suite.
 # Run it from a real checkout: the codex packaging test rejects a git worktree.
 #
-# Left out on purpose: tests/claude-code/run-skill-tests.sh,
-# tests/explicit-skill-requests, tests/antigravity, tests/opencode (they drive a
-# real agent CLI) and scripts/lint-shell.sh --all (red on upstream's baseline).
+# Left out on purpose:
+# - the rest of tests/claude-code (run-skill-tests.sh and the tests that call
+#   `claude`), tests/explicit-skill-requests and
+#   tests/opencode/run-tests.sh --integration: they drive a real agent CLI.
+# - tests/antigravity/test-plugin-manifest.sh: it expects the Claude manifest
+#   version this fork omits (tests/installer/test-install.mjs asserts that).
+# - tests/hooks/test-run-hook-cmd-windows.sh: Windows only.
+# - tests/brainstorm-server/windows-lifecycle.test.sh: upstream keeps it out of
+#   `npm test`; off Windows it skips its Windows cases and sleeps 150 seconds.
+# - scripts/lint-shell.sh --all: red on upstream's baseline.
+# The list is fixed and upstream adds tests without touching it: after a sync,
+# check `git diff --name-status <old-tag> <new-tag> -- tests/` against it.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -26,10 +35,15 @@ suites=(
   "bash tests/codex/test-marketplace-manifest.sh"
   "bash tests/codex-plugin-sync/test-sync-to-codex-plugin.sh"
   "bash tests/systematic-debugging/test-find-polluter.sh"
+  "bash tests/diagnosing-superpowers/test-skill-structure.sh"
   "bash tests/claude-code/test-sdd-workspace.sh"
   "bash tests/claude-code/test-worktree-path-policy.sh"
+  "bash tests/claude-code/test-executing-plans-scripts.sh"
   "bash tests/kimi/run-tests.sh"
   "bash tests/devin/test-devin-plugin.sh"
+  "bash tests/antigravity/test-antigravity-tools.sh"
+  "bash tests/antigravity/test-logo.sh"
+  "bash tests/opencode/run-tests.sh"
   "bash tests/version-bump/test-bump-version.sh"
   "bash tests/writing-skills/test-render-graphs.sh"
   "node --test tests/pi/test-pi-extension.mjs"
