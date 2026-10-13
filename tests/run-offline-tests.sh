@@ -21,6 +21,7 @@ unset DISABLE_TELEMETRY SUPERPOWERS_DISABLE_TELEMETRY CLAUDE_CODE_DISABLE_NONESS
 
 suites=(
   "bash tests/hooks/test-session-start.sh"
+  "bash tests/hooks/test-run-hook-direct-exec.sh"
   "bash tests/shell-lint/test-lint-shell.sh"
   "bash tests/codex/test-package-codex-plugin.sh"
   "bash tests/codex/test-marketplace-manifest.sh"
