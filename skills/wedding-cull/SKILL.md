@@ -20,7 +20,7 @@ Edits go into the XMP sidecars and render through Adobe's own engine. RAW pixels
 If the photos are in a Lightroom catalog, the catalog holds the edits and a sidecar holds only what was last saved to it. Keep them in step (select the folder's photos, then the Metadata menu):
 
 - Before a job: Save Metadata to Files, unless nothing changed in Lightroom since the last Save or Read. Unsaved edits are missing from the JPGs and lost at the next Read.
-- After a job that wrote sidecars, or a sidecar restored from a backup: Read Metadata from Files before anything else in Lightroom; a Save first overwrites what was written. So `apply` goes straight into `export`, and per-photo exposure/WB after `preset` fits between that Read and the Save before `crop`.
+- After `preset` or `apply` (the jobs that write sidecars), or a sidecar restored from a backup: Read Metadata from Files before anything else in Lightroom; a Save first overwrites what was written. So `apply` goes straight into `export`, and per-photo exposure/WB after `preset` fits between that Read and the Save before `crop`.
 - Photos Lightroom flags as changed on disk (the culling app rated them after import): Read those before the first Save, or the Save overwrites their ratings. If they also have unsaved Lightroom edits, ask the user which to keep.
 
 ## Jobs
@@ -55,4 +55,4 @@ Run `uv run <this-skill-dir>/photo.py <job> ...` from any folder; `--help` lists
 - Frames with no CR3 (PSD-only) are skipped; those export from Photoshop.
 - Crops of crop-mode RAWs come out under 5088px, because export never upscales.
 - Upright=Level was verified in Photoshop/Camera Raw renders, not in Lightroom itself.
-- To undo only the crop, reset it in Lightroom; setting Upright to Off drops the straightening too. To undo a frame entirely, copy its sidecar back from an `xmp_backup_<YYYY-MM-DD>/`. Each holds the sidecars as they were before that day's first job (the oldest, before any job), so a restore also drops every later job and saved Lightroom edit. Either way the JPG keeps the old look until it is exported again: one frame from Lightroom (sRGB, long edge 5088 px), or rerun `export`.
+- To undo only the crop, reset it in Lightroom; setting Upright to Off drops the straightening too. To undo a frame entirely, copy its sidecar back from an `xmp_backup_<YYYY-MM-DD>/`. Each holds the sidecars as they were before that day's first job (the oldest, before any job), so a restore also drops every later job and saved Lightroom edit. Either way the JPG keeps the old look until it is exported again: one frame from Lightroom (sRGB, long edge 5088 px, Don't Enlarge), or rerun `export`.
