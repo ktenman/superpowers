@@ -44,8 +44,8 @@ VALIDATE (7–8) → EXTEND (9–10) → OUTPUT (11–12).
 1. `uv run photo.py previews RAWDIR`: oriented 1600px preview JPEGs in WORKDIR/previews; prints WORKDIR.
 2. `exiftool -j RAWDIR > WORKDIR/exif.json`
 3. `uv run photo.py models`, then `uv run scripts/blink.py --previews WORKDIR/previews --out WORKDIR/faces.json`
-4. `uv run scripts/metrics.py --workdir WORKDIR --xmpdir RAWDIR` → `metrics.csv/json`
-   (sharpness, clip, dHash near-dupe clusters, time runs, ratings from sidecars).
+4. `uv run scripts/metrics.py --workdir WORKDIR` → `metrics.csv/json` (sharpness + soft flag,
+   clip, dHash near-dupe clusters, time runs, ratings from the sidecars in exif.json).
 5. `uv run scripts/mkbatches.py --metrics WORKDIR/metrics.json --previews WORKDIR/previews
    --outdir WORKDIR/batches --paths-out WORKDIR/batch_paths.json`: scene/time-coherent batch
    manifests (~12 frames); the workflows' `batches` arg is the list in batch_paths.json.
@@ -63,7 +63,8 @@ VALIDATE (7–8) → EXTEND (9–10) → OUTPUT (11–12).
    preview set. Portfolio picks must all be verify-pass.
 9. **Backup bench**: `workflows/buffer-screen.js` on held-back 5★ + un-screened 4★: screen
    (A/B/C) → scene-balanced shortlist → independent skeptic verify. Expect ~30% downgrades, so
-   shortlist ~1.4× the bench; top up with `workflows/buffer-topup.js` if it still comes up short.
+   shortlist ~1.4× the bench; while the bench is still short it verifies the next-best screened
+   frames, up to the shortlist size again (count those agents in the go-ahead).
 10. **Tiers + edit actions**: `workflows/tier-edit-actions.js` (score 0–100 within scene
     batches, `must_moment` flag, edit_actions crop/color/retouch/none with direction notes) →
     `uv run scripts/aggregate_tiers.py --tier1-size N --force-tier1 <portfolio ids>`
@@ -71,22 +72,28 @@ VALIDATE (7–8) → EXTEND (9–10) → OUTPUT (11–12).
 11. **Organize**: `uv run scripts/organize.py` → `1_must_have_N/`, `2_good_to_have_N/`,
     `3_backup_N/`, `edit_crop/`, `edit_color/`, `edit_retouch/`, `edit_clean/`; each holds
     preview copies + `manifest.csv` (RAW paths + notes), usable as a Lightroom work queue.
-    `--backup` takes `{"backup_50": [bench frames]}`.
-    **BEFORE any rerun: diff each folder's .jpg files against its manifest.csv.** The
-    photographer culls by DELETING previews from these folders, so that diff is user input.
-    organize.py rebuilds from scratch and silently restores anything deleted: capture
-    removals first, apply them to the tier/backup JSONs, then rebuild.
+    `--backup` takes buffer-screen's result (on every run once the backup folder exists).
+    **The photographer culls in these folders: that is user input.** A preview deleted from a
+    tier or backup folder or `edit_clean` = rejected, out of every list; from another `edit_*`
+    queue = that edit done (drop it from edit_actions) or rejected: ask which; dragged to
+    another tier folder = moved to that list. Before any rerun, diff each folder's files
+    against its manifest.csv and apply the changes to the tier/backup JSONs. organize.py and
+    chrono_merge.py rebuild from scratch, and refuse, listing every conflict, until the input
+    matches what the photographer left.
     For client-facing "one camera" ordering: `uv run scripts/chrono_merge.py` → one folder of
     sequence-renamed copies (`<Name>-001.jpg`…) in corrected chronological order +
     manifest.csv with the id↔seq↔RAW map (apply rule 2 first). For a photographer triage pool
-    (delivery + bench/extras, per-image edit direction columns + EDITS.md):
+    (delivery + bench, per-image edit direction columns + EDITS.md):
     `uv run scripts/build_pool.py` → pool json → chrono_merge on it. Sequence names shift on
     every rebuild: the manifest is the id map, and user deletions from these folders are
     permanent rejects (dropped_user).
-12. **XMP write-back**: `uv run scripts/xmp_writeback.py --keyword "cull/<tier>"` (additive
-    dc:subject; `--label` only if the user explicitly accepts overwriting the culling app's
-    colour label). Always pass `--backup-dir WORKDIR/xmp_backup_<YYYY-MM-DD>` (today): the folder photo.py
-    backs up to; both keep the first copy of each sidecar.
+12. **XMP write-back**: first apply the photographer's deletions from step 11's folders (the same
+    diff), or rejected frames get tagged. Then one Lightroom keyword per list, with photo.py's backup
+    and rating guard: `uv run photo.py keyword RAWDIR TIERS.json tier1_must_have cull/must_have`, the
+    same with `tier2_good_to_have cull/good_to_have`, and `keyword RAWDIR BENCH.json backup_50 cull/backup`
+    (TIERS.json = aggregate_tiers.py's `--out`, BENCH.json = buffer-screen's result). `label` in place
+    of `keyword`, with a colour in place of the keyword, overwrites the culling app's colour label
+    instead: only if the user explicitly accepts that.
 
 ## What made the vision passes reliable
 

@@ -15,6 +15,7 @@ time -- rotation + fill-zoom only, no perspective warp (verified in Photoshop 27
   propose --previews DIR --rawdir DIR --out proposals.json   prints ids, writes only the json
   write   --proposals proposals.json --xmpdir DIR             prints ids; back DIR up first!
   sheet   --proposals proposals.json --before DIR --after DIR --out sheet.jpg
+          prints the files written: sheet.jpg, or sheet-1.jpg, sheet-2.jpg ... past PAGE frames
 """
 import argparse, json, os, subprocess, sys
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
@@ -25,6 +26,7 @@ COMPOSE = 0.85  # YuNet score a face needs to steer the crop; every detection is
 # (tuning set: frontal faces 0.87-0.94; a log end 0.81 and a wall photo panel 0.67 steered crops
 #  wrong; a real face in profile scored 0.62 -- so score must never decide what may be cut)
 YUNET = os.path.expanduser("~/.cache/wedding-cull/yunet.onnx")  # fetched by `photo.py models`
+PAGE = 50  # frames per sheet file: a JPEG can't be taller than 65,535 px, about 280 frames
 
 def fit(p, t):
     """Largest crop (fraction of the axis) that puts position p at fraction t of the crop."""
@@ -148,8 +150,13 @@ def sheet(a):
     Wm = max(t.shape[1] for t in tiles)
     tiles = [np.pad(t, ((0, 10), (0, Wm - t.shape[1] + 10), (0, 0)), constant_values=255) for t in tiles]
     if len(tiles) % 2: tiles.append(np.full_like(tiles[0], 255))
-    cv2.imwrite(a.out, np.vstack([np.hstack(tiles[k:k + 2]) for k in range(0, len(tiles), 2)]),
-                [cv2.IMWRITE_JPEG_QUALITY, 85])
+    rows = [np.hstack(tiles[k:k + 2]) for k in range(0, len(tiles), 2)]
+    pages = [rows[k:k + PAGE // 2] for k in range(0, len(rows), PAGE // 2)]
+    stem, ext = os.path.splitext(a.out)
+    for n, page in enumerate(pages, 1):
+        out = a.out if len(pages) == 1 else f"{stem}-{n}{ext}"
+        if not cv2.imwrite(out, np.vstack(page), [cv2.IMWRITE_JPEG_QUALITY, 85]): sys.exit(f"could not write {out}")
+        print(out)
 
 def selftest():
     assert abs(fit(0.5, T) - 0.75) < 1e-9 and abs(fit(0.4, T) - 0.9) < 1e-9

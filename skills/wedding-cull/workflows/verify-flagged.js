@@ -51,7 +51,6 @@ const results = await parallel(tasks.map(t => () =>
 ))
 
 const ok = results.filter(Boolean)
-const byId = {}; for (const r of ok) byId[r.id] = r
 const fails = ok.filter(r => r.verdict === 'fail')
 const holds = ok.filter(r => r.verdict === 'hold')
 const passes = ok.filter(r => r.verdict === 'pass')

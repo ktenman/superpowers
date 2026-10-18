@@ -8,11 +8,11 @@
 # ]
 # ///
 # NOTE: mediapipe requires numpy<2 -- keep the numpy<2 pin above.
-"""Face detection + eye-blink over previews. Runs in mediapipe venv (cv2 4.11 + mediapipe Tasks).
+"""Face detection + eye-blink over previews.
 Two-stage: YuNet detects faces (robust on small faces) -> FaceLandmarker reads eyeBlink blendshape
 on each face crop >= MINPX. Blink is a FLAG-ONLY signal for 100% review, never a verdict.
 Faces < MINPX get state 'unknown' (too small to judge honestly -> no fabricated number).
-Output faces.json { id:{n_faces,largest_face_frac,faces:[...],primary_flag,blink_primary} }.
+Output faces.json { id:{n_faces,faces:[...],primary_flag,blink_primary} }.
 """
 import os, glob, json, sys, argparse
 import cv2, numpy as np
@@ -65,7 +65,7 @@ def main():
         idn=os.path.splitext(os.path.basename(f))[0]
         img=cv2.imread(f)
         if img is None:
-            out[idn]={"n_faces":0,"largest_face_frac":None,"faces":[],"primary_flag":None,"blink_primary":None,"err":"read"}; continue
+            print(f"{idn}: unreadable preview",file=sys.stderr); continue
         H,W=img.shape[:2]; yn.setInputSize((W,H)); _,det=yn.detect(img)
         faces=[]
         if det is not None:
@@ -75,12 +75,10 @@ def main():
                 area=(w*h)/(W*H)
                 bl=blink_of(img,(x,yy,w,h),W,H) if max(w,h)>=MINPX else None
                 faces.append({"bbox":[x,yy,w,h],"area_frac":round(area,4),
-                              "cx":round((x+w/2)/W,3),"cy":round((yy+h/2)/H,3),
                               "blink":round(bl,3) if bl is not None else None,"state":state_of(bl)})
         top=faces[:2]
         known=[p for p in top if p["blink"] is not None]
         out[idn]={"n_faces":len(faces),
-                  "largest_face_frac":faces[0]["area_frac"] if faces else None,
                   "faces":faces,
                   "primary_flag":(any(p["state"] in ("closed","squint") for p in known) if known else None),
                   "blink_primary":(round(max(p["blink"] for p in known),3) if known else None)}

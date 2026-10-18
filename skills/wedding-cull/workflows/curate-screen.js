@@ -51,7 +51,7 @@ STEP 3 - Judge each frame through four lenses:
   3. Emotional impact - expression, eye contact, connection, a genuine moment vs a flat or posed-dead frame.
   4. Client value - would the couple treasure this / want it printed?
 
-BURST DEDUP (the most important cut): frames sharing a \`burst\` id are near-identical. Keep the best 1-2, drop the rest; in each dropped frame's reason NAME the winning sibling id (e.g. "beaten by 196A1005"). Prefer the frame with best eyes-open + expression + focus.
+BURST DEDUP (the most important cut): frames sharing a \`burst\` id are near-identical. Keep the best 1-2, drop the rest; in each dropped frame's reason NAME the winning sibling id (e.g. "beaten by IMG_1005"). Prefer the frame with best eyes-open + expression + focus.
 
 VERDICTS:
   keep  = strong, deliverable as-is.

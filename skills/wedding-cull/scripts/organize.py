@@ -17,15 +17,44 @@ A frame appears in ONE tier folder and EVERY edit folder that applies.
 Each folder gets a manifest.csv pointing at the RAW originals plus the
 per-frame notes, so the folder works as a Lightroom work queue.
 """
-import argparse, csv, json, os, shutil
+import argparse, csv, glob, json, os, re, shutil, sys
 
 
-def write_folder(outdir, name, rows, previews, rawdir, raw_ext, extra_cols):
-    d = os.path.join(outdir, name)
+def earlier(outdir, name):
+    """This folder's earlier builds (a tier folder's name carries its count: any 1_must_have_<n>)."""
+    same = re.escape(name.rstrip("0123456789")) + r"\d*"
+    return [os.path.dirname(d) for d in glob.glob(os.path.join(glob.escape(outdir), "*", ""))
+            if re.fullmatch(same, os.path.basename(os.path.dirname(d)))]
+
+
+def conflicts(group, old, previews):
+    """The photographer's cull of one group of folders: every file they deleted, added or dragged between the
+    group's folders must sit where the new input puts it, or the rebuild would undo that."""
+    want, left, touched, errs = {}, {}, set(), []
+    for name, rows, _ in group:
+        kind = name.rstrip("0123456789_")
+        for r in rows: want.setdefault(r["id"], set()).add(kind)
+        if len(old[name]) > 1:  # earlier versions left the old count's folder behind: which one is being culled?
+            errs.append(f"{' and '.join(old[name])}: two builds of one folder, move out the one not being culled")
+            continue
+        for o in old[name]:
+            man = os.path.join(o, "manifest.csv")
+            if not os.path.exists(man):
+                errs.append(f"{o} has lost its manifest.csv, so what was deleted from it can't be told"); continue
+            ids = {r["id"] for r in csv.DictReader(open(man))}
+            have = {f.removesuffix(".jpg") for f in os.listdir(o) if not f.startswith(".")} - {"manifest.csv"}
+            for i in have: left.setdefault(i, set()).add(kind)
+            touched |= (have - ids) | {i for i in ids - have if os.path.exists(os.path.join(previews, i + ".jpg"))}
+    show = lambda s: " and ".join(sorted(s)) or "no folder"
+    return errs + [f"{i}: left in {show(left.get(i, ()))}, the input puts it in {show(want.get(i, ()))}"
+                   for i in sorted(touched) if left.get(i, set()) != want.get(i, set())]
+
+
+def write_folder(outdir, name, rows, previews, extra_cols, old):
     # rebuild from scratch so reruns after a swap don't leave stale previews behind
     # (only ever removes the folders this script itself creates -- preview copies + manifest)
-    if os.path.isdir(d):
-        shutil.rmtree(d)
+    for o in old: shutil.rmtree(o)
+    d = os.path.join(outdir, name)
     os.makedirs(d, exist_ok=True)
     cols = ["id", "scene", "score", "raw_path"] + extra_cols
     with open(os.path.join(d, "manifest.csv"), "w", newline="") as fh:
@@ -36,7 +65,6 @@ def write_folder(outdir, name, rows, previews, rawdir, raw_ext, extra_cols):
             if os.path.exists(src):
                 shutil.copy2(src, os.path.join(d, r["id"] + ".jpg"))
             w.writerow({c: r.get(c, "") for c in cols})
-    return len(rows)
 
 
 def main():
@@ -58,26 +86,31 @@ def main():
                      edit_actions="+".join(v.get("edit_actions", []))) for v in vs]
 
     t1, t2 = rows_of(t["tier1_must_have"]), rows_of(t["tier2_good_to_have"])
-    n1 = write_folder(a.outdir, f"1_must_have_{len(t1)}", t1, a.previews, a.rawdir, a.raw_ext, note_cols)
-    n2 = write_folder(a.outdir, f"2_good_to_have_{len(t2)}", t2, a.previews, a.rawdir, a.raw_ext, note_cols)
-    print(f"tier folders: {n1} + {n2}")
-
+    folders = [(f"1_must_have_{len(t1)}", t1, note_cols), (f"2_good_to_have_{len(t2)}", t2, note_cols)]
     if a.backup:
-        b = json.load(open(a.backup))
-        bench = [dict(v, raw_path=rp(v["id"]), score="") for v in b["backup_50"]]
-        nb = write_folder(a.outdir, f"3_backup_{len(bench)}", bench, a.previews, a.rawdir, a.raw_ext,
-                          ["grade", "dup_risk", "flag100", "note", "v_note"])
-        print(f"backup folder: {nb}")
+        bench = [dict(v, raw_path=rp(v["id"]), score="") for v in json.load(open(a.backup))["backup_50"]]
+        folders.append((f"3_backup_{len(bench)}", bench, ["grade", "dup_risk", "flag100", "note", "v_note"]))
 
     # edit-action queues over the delivered tiers (tier1+tier2)
     allv = t1 + t2
     for action, folder in (("crop", "edit_crop"), ("color", "edit_color"), ("retouch", "edit_retouch")):
-        sub = [v for v in allv if action in v["edit_actions"].split("+")]
-        write_folder(a.outdir, folder, sub, a.previews, a.rawdir, a.raw_ext, note_cols)
-        print(f"{folder}: {len(sub)}")
-    clean = [v for v in allv if v["edit_actions"] in ("none", "")]
-    write_folder(a.outdir, "edit_clean", clean, a.previews, a.rawdir, a.raw_ext, note_cols)
-    print(f"edit_clean: {len(clean)}")
+        folders.append((folder, [v for v in allv if action in v["edit_actions"].split("+")], note_cols))
+    folders.append(("edit_clean", [v for v in allv if v["edit_actions"] in ("none", "")], note_cols))
+
+    # every folder checked before any is rebuilt, every conflict reported at once; the tier and backup
+    # folders are one group (a preview dragged between them is a tier change), each edit queue its own
+    if not a.backup and earlier(a.outdir, "3_backup_"):
+        sys.exit(f"{a.outdir} has a backup folder: pass the bench with --backup, so the cull is checked against it")
+    old = {name: earlier(a.outdir, name) for name, _, _ in folders}
+    groups = [[f for f in folders if f[0][0].isdigit()]] + [[f] for f in folders if not f[0][0].isdigit()]
+    errs = [e for g in groups for e in conflicts(g, old, a.previews)]
+    if errs:
+        sys.exit("\n".join(errs) + "\napply the photographer's changes to the tier/backup JSONs: a preview deleted "
+                 "from a tier/backup folder or edit_clean = rejected, from another edit queue = that edit done or "
+                 "rejected (ask), dragged to another tier folder = moved there; move out any file that isn't a preview")
+    for name, rows, cols in folders:
+        write_folder(a.outdir, name, rows, a.previews, cols, old[name])
+        print(f"{name}: {len(rows)}")
 
 
 if __name__ == "__main__":
