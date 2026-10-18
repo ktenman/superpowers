@@ -11,13 +11,13 @@ or render JPGs through Photoshop/Camera Raw.
   crop     RAWDIR [MIN]             thirds crop + straighten proposals -> review sheet, writes nothing
   apply    RAWDIR OUTDIR            write the reviewed proposals, export those frames as JPGs
   export   RAWDIR OUTDIR [MIN]      JPGs of every CR3 rated >= MIN, rendered from its sidecar
-  previews RAWDIR                   1600px oriented JPEG of every CR3 for the cull (crop makes its own)
+  previews RAWDIR                   1600px oriented JPEG of every CR3 into previews/ (crop runs this too)
   decode   RAWDIR ID...             2560px oriented JPEGs of single frames, for the verify pass
-  models                            fetch the face models for scripts/blink.py (crop fetches its own)
+  models                            fetch the face models (crop runs this too; scripts/blink.py needs them)
   selftest                          preset, backup and rating guard on synthetic sidecars
 
 A RAW folder's work files live in ~/Downloads/wedding-cull/<folder>-<6 hex of its full path>/:
-previews/, verify/, proposals.json, sheet.jpg and xmp_backup_<date>/. Jobs print it.
+previews/, verify/, proposals.json, sheet.jpg and xmp_backup_<YYYY-MM-DD>/. Jobs print it.
 JPGs: 5088px long edge, Photoshop quality 11, sRGB.
 """
 import argparse, hashlib, re, shutil, subprocess, sys, tempfile

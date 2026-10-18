@@ -15,13 +15,13 @@ batch with the Agent tool. Each script's header comment gives its `args` shape;
 `wedding` is one line of context for the vision agents (couple, place, date, camera bodies and
 their file prefixes).
 
-## Cull-specific rules (on top of SKILL.md's hard rules)
+## Cull-specific rules (on top of SKILL.md's hard rules and Lightroom round trip)
 
 1. **Contract first.** Read the booking contract before curating: delivery count floor AND
    ceiling, mandatory coverage buckets, preview deadline, portfolio cap / client veto.
    Scene-balance every cut against the mandatory buckets.
-2. **Two-camera clock sync.** The cull reads one RAW folder holding every card. File names are the
-   frame IDs, so the bodies need different file-name prefixes; ask the user if two share one.
+2. **Two-camera clock sync.** The cull reads one RAW folder holding every card, the one Lightroom
+   imported them into. File names are the frame IDs, so the bodies need different file-name prefixes; ask the user if two share one.
    NEVER interleave bodies by EXIF time without verifying sync on a
    moment both cameras shot (first kiss, first dance): VIEW the candidate pairs. Scene-note
    labels can be premise errors (a "rings" frame that's really the ring-bearer waiting
