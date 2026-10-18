@@ -8,7 +8,8 @@ export const meta = {
 }
 
 // args: {wedding, batches: [batch paths], delivery: {scene: delivered count}, bench: final buffer size,
-//        shortlist: how many to verify (verify downgrades ~30%, so ~1.4x bench avoids a top-up)}
+//        shortlist: how many to verify first (verify downgrades ~30%, so ~1.4x bench); while the bench
+//        is still short, up to as many more of the next-best are verified}
 
 const SCENES = ['prep','ceremony','session','congratulations','group','party','details','other']
 
@@ -64,7 +65,7 @@ For EVERY element: use the Read tool on its "preview" path to VIEW the image, th
 - note: one line. If an obvious crop or color/exposure direction jumps out, say it in words (never invent numbers).
 Echo each preview path back in "preview". Return ONE verdict per element, all of them.`
 
-const VERIFY_PROMPT = (id, preview) => `Independent second look for a wedding BUFFER pick. Frame ${id}. Use the Read tool to open ${preview} and judge it fresh, as a skeptic.
+const VERIFY_PROMPT = (id, preview, hint) => `Independent second look for a wedding BUFFER pick. Frame ${id}. Use the Read tool to open ${preview} and judge it fresh, as a skeptic. (Screening note, treat as hint only: ${hint})
 
 Confirm it is worth keeping as a nice-to-have backup behind the locked delivery. Downgrade if: the primary subject is soft/out-of-focus, a key face is blinked or mid-word, the composition is awkward, or it's clearly redundant. Keep if it's a clean, usable, pleasant frame.
 - eyes: primary subject (profile/back/no-face = na).
@@ -92,8 +93,8 @@ let kept = Object.values(byId).filter(v =>
 
 // score for ranking
 const gradeS = { A: 30, B: 15 }
-const eyeS = { open: 6, na: 4, partial: 2, closed: -100 }
-const focusS = { sharp: 8, acceptable: 4, soft: -2, oof: -100 }
+const eyeS = { open: 6, na: 4, partial: 2 }
+const focusS = { sharp: 8, acceptable: 4, soft: -2 }
 const score = v => (gradeS[v.grade]||0) + (eyeS[v.eyes]||0) + (focusS[v.focus]||0)
 kept.sort((a,b) => score(b) - score(a))
 
@@ -113,21 +114,29 @@ function sceneBalancedPick(pool, n) {
   // pass 2: fill remaining slots with best leftovers regardless of scene
   for (const v of pool) {
     if (chosen.length >= n) break
-    if (!taken.has(v.id)) { chosen.push(v); taken.add(v.id); cnt[v.scene]=(cnt[v.scene]||0)+1 }
+    if (!taken.has(v.id)) { chosen.push(v); taken.add(v.id) }
   }
   return chosen
 }
 const shortlist = sceneBalancedPick(kept, args.shortlist)
 log(`verify shortlist: ${shortlist.length} (of ${kept.length} kept, ${Object.keys(byId).length} screened)`)
 
-// ---------- Phase 2: independent verify of the shortlist ----------
+// ---------- Phase 2: independent verify of the shortlist, topped up while the bench is short ----------
 phase('Verify')
-const verified = await parallel(shortlist.map(v => () =>
-  agent(VERIFY_PROMPT(v.id, v.preview), { label: `verify:${v.id}`, phase: 'Verify', schema: VERIFY_SCHEMA, model: 'sonnet', effort: 'medium' })
+const verify = vs => parallel(vs.map(v => () =>
+  agent(VERIFY_PROMPT(v.id, v.preview, v.note), { label: `verify:${v.id}`, phase: 'Verify', schema: VERIFY_SCHEMA, model: 'sonnet', effort: 'medium' })
     .then(res => res ? ({ ...v, verify: res }) : null)
-))
+)).then(rs => rs.filter(Boolean))
+const verified = await verify(shortlist)
+const keeps = () => verified.filter(x => x.verify.confirm === 'keep').length
+const rest = kept.filter(v => !shortlist.includes(v)).slice(0, args.shortlist)  // next-best: 2x the shortlist in all
+while (keeps() < args.bench && rest.length) {
+  const next = rest.splice(0, Math.ceil((args.bench - keeps()) * 1.4))
+  log(`bench short by ${args.bench - keeps()}: verifying ${next.length} more`)
+  verified.push(...await verify(next))
+}
 
-const confirmed = verified.filter(Boolean).filter(x => x.verify.confirm === 'keep')
+const confirmed = verified.filter(x => x.verify.confirm === 'keep')
 log(`confirmed after verify: ${confirmed.length}`)
 
 // final scene-balanced bench from confirmed (re-sort with verify signal folded in)
@@ -145,11 +154,11 @@ return {
   confirmed: confirmed.length,
   final_count: final50.length,
   scene_dist: dist,
-  buffer_50: final50.map(v => ({
-    id: v.id, tier: undefined, scene: v.scene, eyes: v.eyes, focus: v.focus, grade: v.grade,
+  backup_50: final50.map(v => ({
+    id: v.id, scene: v.scene, eyes: v.eyes, focus: v.focus, grade: v.grade,
     subject: v.subject, note: v.note,
     v_eyes: v.verify.eyes, v_focus: v.verify.focus, dup_risk: v.verify.dup_risk,
     flag100: v.verify.flag100, v_note: v.verify.note,
   })),
-  dropped_by_verify: verified.filter(Boolean).filter(x => x.verify.confirm === 'downgrade').map(x => ({ id: x.id, scene: x.scene, why: x.verify.note })),
+  dropped_by_verify: verified.filter(x => x.verify.confirm === 'downgrade').map(x => ({ id: x.id, scene: x.scene, why: x.verify.note })),
 }
