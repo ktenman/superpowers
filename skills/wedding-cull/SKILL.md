@@ -19,9 +19,9 @@ Edits go into the XMP sidecars and render through Adobe's own engine. RAW pixels
 
 If the photos are in a Lightroom catalog, the catalog holds the edits and a sidecar holds only what was last saved to it. Keep them in step (select the folder's photos, then the Metadata menu):
 
-- Before a job: Save Metadata to Files, unless nothing changed in Lightroom since the last Read. Unsaved edits are missing from the JPGs and lost at the next Read.
-- After a job that wrote sidecars: Read Metadata from Files before anything else in Lightroom; a Save first overwrites what the job wrote. So `apply` goes straight into `export`, and per-photo exposure/WB after `preset` fits between that Read and the Save before `crop`.
-- Photos Lightroom flags as changed on disk (the culling app rated them after import): Read before the first Save, or the Save overwrites those ratings.
+- Before a job: Save Metadata to Files, unless nothing changed in Lightroom since the last Save or Read. Unsaved edits are missing from the JPGs and lost at the next Read.
+- After a job that wrote sidecars, or a sidecar restored from a backup: Read Metadata from Files before anything else in Lightroom; a Save first overwrites what was written. So `apply` goes straight into `export`, and per-photo exposure/WB after `preset` fits between that Read and the Save before `crop`.
+- Photos Lightroom flags as changed on disk (the culling app rated them after import): Read those before the first Save, or the Save overwrites their ratings. If they also have unsaved Lightroom edits, ask the user which to keep.
 
 ## Jobs
 
@@ -37,9 +37,9 @@ Run `uv run <this-skill-dir>/photo.py <job> ...` from any folder; `--help` lists
 | a wedding culled | read `pipeline.md` | |
 
 - Vetoes: `proposals.json` in the work folder maps file-name stem → proposal. Set a frame's `"crop"` to `null` to keep only the straightening; delete its entry to leave it as shot. Rerunning `crop` rebuilds the file and loses the vetoes.
-- Run `preset` before `crop`. `preset` copies every crs tag in the preset, so list them first: `exiftool -s -XMP-crs:all PRESET.xmp`. Exposure2012, WhiteBalance, ColorTemperature or Tint there overwrite the user's own. `crop` leaves frames that already have a crop or an Upright mode alone, so HasCrop True or a PerspectiveUpright other than Off makes it skip every frame; ask the user, and offer a copy without them: `exiftool -o COPY.xmp -XMP-crs:HasCrop= -XMP-crs:PerspectiveUpright= PRESET.xmp`.
+- Run `preset` before `crop`. `preset` copies every crs tag in the preset, so list them first: `exiftool -s -XMP-crs:all PRESET.xmp`. Two kinds need the user's say before writing, with a copy without them on offer (`exiftool -o COPY.xmp -XMP-crs:TAG= ... PRESET.xmp`): Exposure2012, WhiteBalance, ColorTemperature or Tint overwrite the user's own; HasCrop True or a PerspectiveUpright other than Off make `crop` skip every frame, because it leaves frames that already have a crop or an Upright mode alone.
 - A filter pack with several .xmp and no file named: read its README and use the variant without baked-in exposure/WB.
-- `preset` always turns lens correction on, which needs a profile per lens. List the lenses with `exiftool -q -q -p '$LensModel' -ext cr3 RAWDIR | sort -u`, then search inside the profiles for each: `grep -rlF 'LENS' "/Library/Application Support/Adobe/CameraRaw/LensProfiles/1.0"`. Profile file names spell lenses differently (`RF 28-70mm` for `RF28-70mm`). Without a profile, Camera Raw silently skips the correction: tell the user which lenses have none.
+- `preset` always turns lens correction on, which needs a profile per lens. List the lenses with `exiftool -q -q -p '$LensModel' -ext cr3 RAWDIR | sort -u`, then search inside the profiles for each: `grep -rlF 'LENS' "/Library/Application Support/Adobe/CameraRaw/LensProfiles/1.0"`. Profile file names spell lenses differently (`RF 28-70mm` for `RF28-70mm`). A lens without one gets no profile correction, and Camera Raw reports no error: tell the user which lenses have none before writing.
 
 ## How crop + straighten work (verified, don't re-derive)
 
@@ -55,4 +55,4 @@ Run `uv run <this-skill-dir>/photo.py <job> ...` from any folder; `--help` lists
 - Frames with no CR3 (PSD-only) are skipped; those export from Photoshop.
 - Crops of crop-mode RAWs come out under 5088px, because export never upscales.
 - Upright=Level was verified in Photoshop/Camera Raw renders, not in Lightroom itself.
-- To undo a frame entirely, copy its sidecar back from `xmp_backup_<YYYY-MM-DD>/`. That copy predates the day's first job, so it also drops a same-day `preset` and Lightroom edits saved after it. To undo only the crop and straightening, reset Crop and set Upright to Off in Lightroom. Either way the JPG keeps the old look until it is exported again: one frame from Lightroom, or rerun `export`.
+- To undo only the crop, reset it in Lightroom; setting Upright to Off drops the straightening too. To undo a frame entirely, copy its sidecar back from an `xmp_backup_<YYYY-MM-DD>/`. Each holds the sidecars as they were before that day's first job (the oldest, before any job), so a restore also drops every later job and saved Lightroom edit. Either way the JPG keeps the old look until it is exported again: one frame from Lightroom (sRGB, long edge 5088 px), or rerun `export`.
