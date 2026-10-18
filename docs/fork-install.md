@@ -11,7 +11,7 @@ of Claude Code, Codex or GitHub Copilot CLI. It adds no npm dependencies and
 installs no CLI globally. From an existing checkout, use `node scripts/install.js`.
 Both commands install the **remote fork's `main` branch**, independent of the
 checkout's current branch. Native plugin installation includes the fork-only
-`autoresearch`, `ai-checker` and `akit-lookup` skills.
+`autoresearch`, `ai-checker`, `akit-lookup` and `wedding-cull` skills.
 
 Run the same command again to update. Missing CLIs and a working local Claude
 checkout (see [Existing local installations](#existing-local-installations)) are
