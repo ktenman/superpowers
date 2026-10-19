@@ -20,7 +20,7 @@ Edits go into the XMP sidecars and render through Adobe's own engine. RAW pixels
 If the photos are in a Lightroom catalog, the catalog holds the edits and a sidecar holds only what was last saved to it. Keep them in step (select the folder's photos, then the Metadata menu):
 
 - Before a job: Save Metadata to Files, unless nothing changed in Lightroom since the last Save or Read. Unsaved edits are missing from the JPGs and lost at the next Read.
-- After `preset`, `apply`, `keyword` or `label` (every job that writes sidecars), or a sidecar restored from a backup: Read Metadata from Files before anything else in Lightroom; a Save first overwrites what was written. So `apply` goes straight into `export`, and per-photo exposure/WB after `preset` fits between that Read and the Save before `crop`.
+- After `preset`, `apply`, `keyword` or `label` (every job that writes sidecars), or a sidecar restored from a backup: Read Metadata from Files before anything else in Lightroom; a Save first overwrites what was written. So `apply` goes straight into `export`, and per-photo exposure/WB after `preset` fits between that Read and the Save before the next job (`crop`, or `apply` in the ask-once order).
 - Photos Lightroom flags as changed on disk (the culling app rated them after import): Read those before the first Save, or the Save overwrites their ratings. If they also have unsaved Lightroom edits, ask the user which to keep.
 
 ## Jobs
