@@ -9,15 +9,18 @@ Faces (YuNet) on the oriented previews decide the crop: the eye line goes on the
 a single subject on the vertical third that leaves room where the face is turned (else the nearer
 third). An axis keeps the photographer's composition when reaching its third would cut more than
 --min-keep of the frame (e.g. a deliberately centered portrait). Aspect ratio is kept.
-Straightening is not measured here: Upright=Level (crs 3) makes Camera Raw compute it at render
-time -- rotation + fill-zoom only, no perspective warp (verified in Photoshop 27.8).
+Straightening is not set here: Upright=Level (crs 3) makes Camera Raw compute it at render
+time -- rotation + fill-zoom only, no perspective warp (verified in Photoshop 27.8). `level` then
+keeps it only on frames where that rotation measurably levels the as-shot frame.
 
   propose --previews DIR --rawdir DIR --out proposals.json   prints ids, writes only the json
   write   --proposals proposals.json --xmpdir DIR             prints ids; back DIR up first!
+  level   --proposals proposals.json --before DIR --after DIR
+          before = the camera's own JPEGs; sets "level" per frame, prints the ids to re-render (crop, no Level)
   sheet   --proposals proposals.json --before DIR --after DIR --out sheet.jpg
           prints the files written: sheet.jpg, or sheet-1.jpg, sheet-2.jpg ... past PAGE frames
 """
-import argparse, json, os, subprocess, sys
+import argparse, json, os, subprocess, sys, tempfile
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 import cv2, numpy as np
 
@@ -93,6 +96,34 @@ def turned(b, f):
                                          np.float32([kf[x.trainIdx].pt for x in m]))
     return None if M is None or inl.sum() < 30 else float(np.degrees(np.arctan2(M[1, 0], M[0, 0])))
 
+def roll(img):
+    """Camera roll in degrees from the long near-vertical lines; None below 4 lines. Pitch makes true verticals
+    lean in proportion to their distance from the centre column, so fit lean(x) = k*(x - 0.5) + roll."""
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    h, w = g.shape
+    segs = cv2.createLineSegmentDetector().detect(g)[0]
+    v = []
+    for x1, y1, x2, y2 in ([] if segs is None else segs.reshape(-1, 4)):
+        n, a = np.hypot(x2 - x1, y2 - y1), (np.degrees(np.arctan2(x2 - x1, y2 - y1)) + 90) % 180 - 90  # 0 = vertical
+        if n > .08 * h and abs(a) < 15: v.append(((x1 + x2) / 2 / w - .5, a, n))
+    if len(v) < 4: return None
+    x, y, wt = (np.array(c) for c in zip(*v))
+    keep = np.ones(len(v), bool)
+    for _ in range(4):  # length-weighted least squares, dropping lines that aren't the scene's verticals
+        sw = np.sqrt(wt[keep])
+        k, r = np.linalg.lstsq(np.vstack([x[keep], np.ones(keep.sum())]).T * sw[:, None], y[keep] * sw, rcond=None)[0]
+        res = np.abs(y - (k * x + r))
+        new = res < max(1.0, 2.5 * np.median(res[keep]))
+        if (new == keep).all() or new.sum() < 4: break
+        keep = new
+    return float(r)
+
+def keep_level(r, t):
+    """Level stays only if its visible turn t moves the as-shot roll r at least 0.3 deg closer to level.
+    (one shoot: this kept all 9 frames Level visibly fixed and dropped all 7 the photographer undid --
+    converging verticals, slanted screens, a car interior, a night scene with no true level)"""
+    return None not in (r, t) and abs(t) >= 0.3 and abs(r - t) <= abs(r) - 0.3
+
 def propose(a):
     rows = json.loads(subprocess.check_output(["exiftool", "-j", "-n", "-Orientation", "-Rating", "-HasCrop",
                                                "-PerspectiveUpright", "-ext", "CR3", "-ext", "xmp", a.rawdir]))
@@ -116,18 +147,34 @@ def propose(a):
 def write(a):
     lines = []
     for i, p in json.load(open(a.proposals)).items():
-        tags = ["-XMP-crs:PerspectiveUpright=Level"]
+        if not (p["crop"] or p.get("level", True)): continue  # left as shot
+        tags = ["-XMP-crs:PerspectiveUpright=Level"] if p.get("level", True) else []
         if p["crop"]:
             (l, t), (r, b) = to_sensor(*p["crop"][:2], p["orient"]), to_sensor(*p["crop"][2:], p["orient"])
             tags += ["-XMP-crs:HasCrop=True", "-XMP-crs:CropAngle=0"] + [f"-XMP-crs:{k}={v:.6f}" for k, v in (
                 ("CropLeft", min(l, r)), ("CropRight", max(l, r)), ("CropTop", min(t, b)), ("CropBottom", max(t, b)))]
         lines += ["-q", "-overwrite_original", *tags, os.path.join(a.xmpdir, i + ".xmp"), "-execute"]
         print(i)
-    subprocess.run(["exiftool", "-@", "-"], input="\n".join(lines) + "\n", text=True, check=True)
+    if lines:  # with no arguments exiftool prints its manual, which apply would read as ids
+        subprocess.run(["exiftool", "-@", "-"], input="\n".join(lines) + "\n", text=True, check=True)
+
+def level(a):
+    props, redo = json.load(open(a.proposals)), []
+    for i, p in props.items():
+        b, f = cv2.imread(os.path.join(a.before, i + ".jpg")), cv2.imread(os.path.join(a.after, i + ".jpg"))
+        if b is None or f is None: sys.exit(f"{i}: missing before/after")
+        r, t = roll(b), turned(b, f)
+        p["level"] = keep_level(r, t)
+        if p["level"]: continue
+        p["why"] += f" - not straightened: as shot {'?' if r is None else f'{r:+.1f}'} deg, Level turned {'?' if t is None else f'{t:+.1f}'} deg"
+        if p["crop"]: redo.append(i)
+    json.dump(props, open(a.proposals, "w"), indent=1)
+    if redo: print("\n".join(redo))  # an empty line would read as one blank id
 
 def sheet(a):
     tiles = []
     for i, p in sorted(json.load(open(a.proposals)).items()):
+        if not (p["crop"] or p.get("level", True)): continue  # left as shot: nothing to review
         b, f = cv2.imread(os.path.join(a.before, i + ".jpg")), cv2.imread(os.path.join(a.after, i + ".jpg"))
         if b is None or f is None: print(f"{i}: missing before/after", file=sys.stderr); continue
         meas = []
@@ -136,6 +183,12 @@ def sheet(a):
             if ey is not None: meas.append(f"eye line {ey:.2f}")
         r = turned(b, f)
         meas.append("turned ?" if r is None else f"turned {abs(r):.1f} deg")
+        if p["crop"]:  # dim what the crop cuts: names, logos, slides and hands at the edge are easy to miss
+            H, W = b.shape[:2]
+            x0, y0, x1, y1 = (round(v * s) for v, s in zip(p["crop"], (W, H, W, H)))
+            dim = (b * 0.35).astype(np.uint8)
+            dim[y0:y1, x0:x1] = b[y0:y1, x0:x1]
+            b = dim
         b, f = (cv2.resize(m, (round(m.shape[1] * 400 / m.shape[0]), 400), interpolation=cv2.INTER_AREA) for m in (b, f))
         h, w = f.shape[:2]
         for k in (1, 2):  # thirds grid on the result
@@ -147,14 +200,19 @@ def sheet(a):
             sc = min(0.5, 0.5 * (t.shape[1] - 12) / cv2.getTextSize(s, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0][0])
             cv2.putText(t, s, (6, 20 + 24 * k), cv2.FONT_HERSHEY_SIMPLEX, sc, (0, 0, 0), 1, cv2.LINE_AA)
         tiles.append(t)
+    save(tiles, a.out)
+
+def save(tiles, path):
+    """Same-height tiles two per row into PAGE-frame JPEG pages; prints each file written."""
+    if not tiles: return
     Wm = max(t.shape[1] for t in tiles)
     tiles = [np.pad(t, ((0, 10), (0, Wm - t.shape[1] + 10), (0, 0)), constant_values=255) for t in tiles]
     if len(tiles) % 2: tiles.append(np.full_like(tiles[0], 255))
     rows = [np.hstack(tiles[k:k + 2]) for k in range(0, len(tiles), 2)]
     pages = [rows[k:k + PAGE // 2] for k in range(0, len(rows), PAGE // 2)]
-    stem, ext = os.path.splitext(a.out)
+    stem, ext = os.path.splitext(path)
     for n, page in enumerate(pages, 1):
-        out = a.out if len(pages) == 1 else f"{stem}-{n}{ext}"
+        out = path if len(pages) == 1 else f"{stem}-{n}{ext}"
         if not cv2.imwrite(out, np.vstack(page), [cv2.IMWRITE_JPEG_QUALITY, 85]): sys.exit(f"could not write {out}")
         print(out)
 
@@ -171,14 +229,31 @@ def selftest():
     assert crop_for([face(680, 420, 120), face(270, 500, 40, score=0.62)], 1500, 1000, 0.8)[1].startswith("crop would cut")  # profile: protected
     assert "subject" not in crop_for([face(x, 400, 80) for x in (600, 700, 800)], 1500, 1000, 0.8)[1]  # group: x kept
     assert crop_for([], 1500, 1000, 0.8)[0] is None
+    rng, img = np.random.default_rng(1), np.full((1000, 1500, 3), 128, np.uint8)  # a scene of upright blocks
+    for _ in range(60):
+        x, y, w, h = rng.integers(0, 1400), rng.integers(0, 900), rng.integers(20, 100), rng.integers(90, 300)
+        cv2.rectangle(img, (int(x), int(y)), (int(x + w), int(y + h)), [int(c) for c in rng.integers(0, 255, 3)], -1)
+    tilted = cv2.warpAffine(img, cv2.getRotationMatrix2D((750, 500), 2, 1.1), (1500, 1000), borderValue=(128, 128, 128))
+    r0, r1, t = roll(img), roll(tilted), turned(img, tilted)
+    assert abs(r0) < 0.2 and abs(abs(t) - 2) < 0.2 and abs(r1 - (r0 - t)) < 0.3, (r0, r1, t)  # the sign keep_level relies on
+    assert keep_level(r1, turned(tilted, img)) and not keep_level(r0, t)  # levelling the tilted copy helps; tilting the level one doesn't
+    with tempfile.TemporaryDirectory() as d:  # nothing to re-render or write: no output, which photo.py would read as ids
+        cli = lambda *c: subprocess.run([sys.executable, __file__, *c, "--proposals", f"{d}/p.json"],
+                                        capture_output=True, text=True, check=True).stdout
+        os.mkdir(f"{d}/b"); os.mkdir(f"{d}/a"); cv2.imwrite(f"{d}/b/x.jpg", tilted); cv2.imwrite(f"{d}/a/x.jpg", img)
+        json.dump({"x": {"crop": None, "why": ""}}, open(f"{d}/p.json", "w"))
+        assert cli("level", "--before", f"{d}/b", "--after", f"{d}/a") == "" and json.load(open(f"{d}/p.json"))["x"]["level"]
+        json.dump({"x": {"crop": None, "level": False}}, open(f"{d}/p.json", "w"))
+        o = cli("write", "--xmpdir", d)
+        assert o == "", o[:200]
     print("selftest ok")
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["propose", "write", "sheet", "selftest"])
+    ap.add_argument("cmd", choices=["propose", "write", "level", "sheet", "selftest"])
     ap.add_argument("--previews"); ap.add_argument("--rawdir"); ap.add_argument("--proposals")
     ap.add_argument("--xmpdir"); ap.add_argument("--before"); ap.add_argument("--after"); ap.add_argument("--out")
     ap.add_argument("--min-rating", type=int, default=4)
     ap.add_argument("--min-keep", type=float, default=0.8, help="smallest crop allowed, as fraction of width/height")
     a = ap.parse_args()
-    {"propose": propose, "write": write, "sheet": sheet, "selftest": lambda _: selftest()}[a.cmd](a)
+    {"propose": propose, "write": write, "level": level, "sheet": sheet, "selftest": lambda _: selftest()}[a.cmd](a)
