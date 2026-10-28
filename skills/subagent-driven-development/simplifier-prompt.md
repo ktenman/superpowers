@@ -8,7 +8,7 @@ implementer's report and the task review.
 ```
 Subagent (general-purpose):
   description: "Simplify Task N"
-  model: [MODEL — REQUIRED: choose per SKILL.md Model Selection; an omitted
+  model: [MODEL — REQUIRED: choose per references/simplify-pass.md; an omitted
          model silently inherits the session's most expensive one]
   prompt: |
     You are simplifying one task's implementation before it goes to review.
@@ -98,7 +98,7 @@ Subagent (general-purpose):
 ```
 
 **Placeholders:**
-- `[MODEL]` — REQUIRED: simplifier model per SKILL.md Model Selection
+- `[MODEL]` — REQUIRED: simplifier model per references/simplify-pass.md
 - `[BRIEF_FILE]` — REQUIRED: the task brief file (`bash scripts/task-brief PLAN N`
   prints the path; same file the implementer worked from)
 - `[REPORT_FILE]` — REQUIRED: the file the implementer wrote its report to;

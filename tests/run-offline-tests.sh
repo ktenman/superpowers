@@ -47,6 +47,7 @@ suites=(
   "bash tests/opencode/run-tests.sh"
   "bash tests/version-bump/test-bump-version.sh"
   "bash tests/writing-skills/test-render-graphs.sh"
+  "bash tests/skill-size/test-skill-size.sh"
   "node --test tests/pi/test-pi-extension.mjs"
   "node --test tests/installer/test-install.mjs"
   "node --test tests/upstream-sync/test-sync-upstream.mjs"
