@@ -8,11 +8,20 @@ The final whole-branch review gets a package too: run
 branch started from, e.g. `git merge-base main HEAD`) and include the
 printed path in the final review dispatch, so the final reviewer reads
 one file instead of re-deriving the branch diff with git commands. Dispatch
-on the frontier tier (see SKILL.md's Model Selection), using
+on the frontier tier (below), using
 superpowers:requesting-code-review's
 [code-reviewer.md](../../requesting-code-review/code-reviewer.md). Point it at
 the ledger's deferred-minor and parked lines so it can triage which must be
 fixed before merge.
+
+**Frontier tier.** When the lineup carries a model above your usual top tier
+(today, Claude Fable), the final whole-branch review goes there and nothing
+else does — it is the last gate before merge, the one review whose misses
+ship. A safety classifier can refuse a security-shaped diff, and the refusal
+arrives as an empty or truncated report rather than an error: treat an empty
+final review as a failed dispatch and re-run it one tier down, never as a
+clean verdict. When the tier is unavailable — data retention, latency — the
+most capable model you can reach is the floor.
 
 If the final whole-branch review returns findings, dispatch ONE fix subagent
 with the complete findings list — not one fixer per finding.

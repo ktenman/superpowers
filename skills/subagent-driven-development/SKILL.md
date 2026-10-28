@@ -147,25 +147,13 @@ Use the least powerful model that can handle each role to conserve cost and incr
 **Integration and judgment tasks** (multi-file coordination, pattern matching, debugging): use a standard model.
 
 **Architecture and design tasks**: use the most capable available model.
-The final whole-branch review is one of these — dispatch it deliberately,
-never on the session default. See Frontier tier below.
-
-**Frontier tier.** When the lineup carries a model above your usual top tier
-(today, Claude Fable), the final whole-branch review goes there and nothing
-else does — it is the last gate before merge, the one review whose misses
-ship. A safety classifier can refuse a security-shaped diff, and the refusal
-arrives as an empty or truncated report rather than an error: treat an empty
-final review as a failed dispatch and re-run it one tier down, never as a
-clean verdict. When the tier is unavailable — data retention, latency — the
-most capable model you can reach is the floor.
+The final whole-branch review is one of these — dispatch it on the most
+capable available model, not the session default.
 
 **Review tasks**: choose the model with the same judgment, scaled to the
 diff's size, complexity, and risk. A small mechanical diff does not need the
 most capable model; a subtle concurrency change does. Scoped re-reviews of
 small fix diffs take a cheap-to-mid tier.
-
-**The simplify pass**: judgment work over one small diff — mid-tier, never
-above the reviewer that follows it.
 
 **Fix-loop escalation (rounds 4-5)**: use a model at least one tier above
 the implementer that got stuck.
@@ -264,23 +252,8 @@ rush it into implementation.
 
 ### 3. Simplify the diff
 
-One simplifier subagent per task, between the implementer's report and the
-task review. It cuts what the task did not need and commits. The task review
-that follows is what vets its diff.
-
-The simplifier writes to the worktree, so it reads the code directly — it gets
-BASE and HEAD, not a review package. The package is generated once, in step 4,
-after the simplifier has committed, so it spans the implementation and the
-simplification as one diff.
-
-- Statuses: **SIMPLIFIED** (a commit the reviewer will see), **NO_CHANGES**
-  (the diff was already minimal), **BLOCKED** (the suite was red on arrival
-  and reverting the cuts does not fix it — that is an implementer problem;
-  route it as one).
-- Ledger: `Task <N>: simplified (<net line change>, commit <sha7>)`, or
-  `Task <N>: simplify — no changes`.
-- The pass never runs inside the fix loop: a simplifier and a fixer taking
-  turns on the same code is how an addressed finding comes back.
+Before dispatching the simplifier, read
+[references/simplify-pass.md](references/simplify-pass.md) and follow it.
 
 Template: [simplifier-prompt.md](simplifier-prompt.md)
 
