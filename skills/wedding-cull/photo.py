@@ -7,8 +7,12 @@
 RAWs are never touched: jobs write only XMP sidecars (backed up first, ratings/labels checked after)
 or render JPGs through Photoshop/Camera Raw.
 
-  preset   RAWDIR PRESET.xmp [MIN]  look preset + lens correction on sidecars rated >= MIN (default 4)
-  crop     RAWDIR [MIN]             thirds crop + straighten proposals -> review sheet, writes nothing
+  look     RAWDIR PRESET.xmp [MIN] [AMOUNT]  the preset on staged copies, measured against the camera's own
+                                    JPEGs -> flagged frames + review sheet, writes nothing
+  preset   RAWDIR PRESET.xmp [MIN] [AMOUNT]  look preset at AMOUNT (default 0.5) + lens correction on
+                                    sidecars rated >= MIN (default 4)
+  crop     RAWDIR [MIN] [PRESET.xmp [AMOUNT]]  thirds crop + straighten proposals -> review sheet, writes nothing;
+                                    PRESET (when preset runs after crop) renders the frames as preset will leave them
   apply    RAWDIR OUTDIR            write the reviewed proposals, export those frames as JPGs
   export   RAWDIR OUTDIR [MIN]      JPGs of every CR3 rated >= MIN, rendered from its sidecar
   previews RAWDIR                   1600px oriented JPEG of every CR3 into previews/ (crop runs this too)
@@ -39,6 +43,15 @@ META = ["PresetType", "Cluster", "UUID", "SupportsAmount", "SupportsColor", "Sup
 # ponytail: exiftool silently drops crs tags it doesn't know; these are copied by hand.
 # Extend the list if preset reports others missing.
 BY_HAND = ["ColorVariance", "CurveRefineSaturation"]
+# What AMOUNT scales, toward 0 or the neutral value given; point curves blend toward the straight line.
+# Anything else (versions, profile, hues, tone-region splits, sharpening, white balance) is copied as is.
+LOOK = re.compile(r"(Contrast|Highlights|Shadows|Whites|Blacks|Clarity)2012|Texture|Dehaze|Vibrance|Saturation|"
+                  r"Parametric(Shadows|Darks|Lights|Highlights)|(Hue|Saturation|Luminance)Adjustment\w+|ColorGrade\w+(Sat|Lum)|"
+                  r"SplitToning(Shadow|Highlight)Saturation|SplitToningBalance|ShadowTint|(Red|Green|Blue)(Hue|Saturation)|"
+                  r"PostCropVignette(Amount|HighlightContrast)|GrainAmount|ColorVariance")
+NEUTRAL = {"GrainSize": 25, "GrainFrequency": 50, "PostCropVignetteMidpoint": 50, "PostCropVignetteFeather": 50,
+           "PostCropVignetteRoundness": 0, "ColorGradeBlending": 50, "CurveRefineSaturation": 100}
+LIFT = ("Shadows2012", "Blacks2012", "ParametricShadows", "ParametricDarks")  # raised: kept at full by scaled()
 
 def run(*cmd, **kw):  # a failing tool stops the job
     return subprocess.run([str(c) for c in cmd], check=True, text=True, **kw)
@@ -90,27 +103,83 @@ def guarded(raw, work, write, keep=("Rating", "Label")):
     finally:
         if marks(raw, keep) != before: sys.exit(f"RATING/LABEL CHANGED - restore the sidecars from {b}")
 
-def preset(raw, work, look, n):
-    files = rated(raw, n)
-    if not files: sys.exit(f"no sidecars rated >= {n}")
+def scaled(xmp, amount, work):
+    """The preset at AMOUNT, like Lightroom's Amount slider, saved in the work folder -- except its shadow lift
+    (Shadows/Blacks/Darks up, Contrast down) stays at full. The lift offsets the curves' shadow crush: on one shoot
+    full strength measured median -3.1 L* vs the camera's JPEGs and everything at half still -2.9; half with the
+    lift kept measured +2.7 and is the look the photographer approved."""
+    def one(m):
+        k, v = m["k"], m["v"]
+        if not (LOOK.fullmatch(k) or k in NEUTRAL) or not re.fullmatch(r"[+-]?\d+(\.\d+)?", v): return m[0]
+        x = float(v)
+        if (k in LIFT and x > 0) or (k == "Contrast2012" and x < 0): return m[0]
+        x = NEUTRAL.get(k, 0) + amount * (x - NEUTRAL.get(k, 0))
+        s = f"{x:.{len(v.split('.')[1])}f}" if "." in v else str(round(x))
+        s = "+" + s if v.startswith("+") and x > 0 else s
+        return m[0][:m.start("v") - m.start()] + s + m[0][m.end("v") - m.start():]
+    t = re.sub(r'crs:(?P<k>\w+)="(?P<v>[^"]*)"', one, xmp.read_text())
+    t = re.sub(r"<crs:(?P<k>\w+)>(?P<v>[^<]*)</crs:(?P=k)>", one, t)  # a preset saved by exiftool has elements
+    t = re.sub(r"<rdf:li>(\d+), (\d+)</rdf:li>",
+               lambda m: f"<rdf:li>{m[1]}, {round(int(m[1]) + amount * (int(m[2]) - int(m[1])))}</rdf:li>", t)
+    work.mkdir(parents=True, exist_ok=True)
+    (f := work / f"{xmp.stem} {amount:.0%}.xmp").write_text(t)
+    return f
+
+def write_look(look, files):
     tags = lambda s: set(re.findall(r"crs:[A-Za-z0-9]+", s))
     want = tags(look.read_text()) - {f"crs:{t}" for t in META}  # every setting, none of the preset's bookkeeping
     # read by exiftool: a preset saved by exiftool (a copy without some tags) has them as elements, not attributes
     by_hand = {t: v for t, v in zip(BY_HAND, out("exiftool", "-T", "-n", *(f"-{t}" for t in BY_HAND), look)
                                     .rstrip("\n").split("\t")) if v not in ("-", "")}
-    def write():
-        run("exiftool", "-q", "-overwrite_original", "-tagsFromFile", look, "-XMP-crs:all", *[f"--{t}" for t in META],
-            "-XMP-crs:LensProfileEnable=1", "-XMP-crs:LensProfileSetup=LensDefaults", "-XMP-crs:AutoLateralCA=1", *files)
-        for f in files:
-            x = f.read_bytes().decode()
-            for t, v in by_hand.items():
-                if f"crs:{t}" not in x:
-                    x = x.replace("<crs:AutoLateralCA>", f"<crs:{t}>{v}</crs:{t}>\n  <crs:AutoLateralCA>", 1)
-            f.write_bytes(x.encode())
-            miss = sorted(want - tags(x))  # check: every setting landed
-            if miss: sys.exit(f"MISSING in {f}: {' '.join(miss)}")
-    guarded(raw, work, write)
-    print(f"ok: {len(files)} sidecars updated")
+    run("exiftool", "-q", "-overwrite_original", "-tagsFromFile", look, "-XMP-crs:all", *[f"--{t}" for t in META],
+        "-XMP-crs:LensProfileEnable=1", "-XMP-crs:LensProfileSetup=LensDefaults", "-XMP-crs:AutoLateralCA=1", *files)
+    for f in files:
+        x = f.read_bytes().decode()
+        for t, v in by_hand.items():
+            if f"crs:{t}" not in x:
+                x = x.replace("<crs:AutoLateralCA>", f"<crs:{t}>{v}</crs:{t}>\n  <crs:AutoLateralCA>", 1)
+        f.write_bytes(x.encode())
+        miss = sorted(want - tags(x))  # check: every setting landed
+        if miss: sys.exit(f"MISSING in {f}: {' '.join(miss)}")
+
+def preset(raw, work, look, n, amount):
+    files = rated(raw, n)
+    if not files: sys.exit(f"no sidecars rated >= {n}")
+    if amount != 1: look = scaled(look, amount, work)
+    guarded(raw, work, lambda: write_look(look, files))
+    print(f"ok: {len(files)} sidecars updated, look at {amount:.0%}")
+
+def asshot(raw, dest, ids):
+    """The camera's own JPEG of each frame (its embedded preview), oriented: what look and level measure against.
+    Its tilt reads steadier than the sips previews' (they disagreed by over 0.5 deg on 1 frame in 5)."""
+    dest.mkdir(parents=True, exist_ok=True)
+    def one(i):
+        dst = dest / f"{i}.jpg"
+        if dst.exists() and dst.stat().st_size: return
+        with tempfile.TemporaryDirectory() as t:
+            x = f"{t}/x.jpg"
+            with open(x, "wb") as fh: subprocess.run(["exiftool", "-q", "-q", "-b", "-PreviewImage", raw / f"{i}.CR3"], stdout=fh, check=True)
+            run("exiftool", "-q", "-q", "-overwrite_original", "-tagsFromFile", raw / f"{i}.CR3", "-Orientation", x)
+            run("magick", x, "-auto-orient", dst)
+    with ThreadPoolExecutor(cpu_count()) as ex: list(ex.map(one, ids))
+
+def look(raw, work, xmp, n, amount):
+    models()  # look.py measures faces
+    xs = [x for x in rated(raw, n) if existing([x.with_suffix(".CR3")], "CR3")]
+    if not xs: sys.exit(f"no CR3 rated >= {n}")
+    if amount != 1: xmp = scaled(xmp, amount, work)
+    asshot(raw, work / "asshot", [x.stem for x in xs])
+    stage, dest = work / "stage-look", work / "look"  # not crop's stage: each clears its own
+    for d in (stage, dest): shutil.rmtree(d, ignore_errors=True)
+    stage.mkdir()
+    try:  # the real sidecars are only read
+        for x in xs: clone(x.with_suffix(".CR3"), stage); shutil.copy(x, stage)
+        write_look(xmp, [stage / x.name for x in xs])
+        render(dest, 1600, 8, [stage / f"{x.stem}.CR3" for x in xs])
+    finally: shutil.rmtree(stage)
+    for f in work.glob("look*.jpg"): f.unlink()  # a rerun with fewer pages leaves none behind
+    print(out("uv", "run", "-q", S / "look.py", work / "asshot", dest, work / "look.jpg"), end="")
+    print("(left = the camera's own JPEG, right = the look; no sidecar was written)")
 
 def tag(raw, work, frames, key, value, label):
     """Cull write-back: keyword (added to dc:subject) or colour label on the sidecars of the frames in FRAMES[KEY]."""
@@ -160,27 +229,40 @@ def previews(raw, work, ids=None):  # one size for the cache that crop, the cull
 def clone(src, dst):  # APFS clone: instant and takes no space; a plain copy where cloning can't work
     if subprocess.run(["cp", "-c", src, dst], stderr=subprocess.DEVNULL).returncode: shutil.copy(src, dst)
 
-def crop(raw, work, n):
+def crop(raw, work, n, look=None, amount=0.5):
     models()
     raws = existing([x.with_suffix(".CR3") for x in rated(raw, n)], "CR3")
     previews(raw, work, [r.stem for r in raws])  # all that propose reads
     props = work / "proposals.json"
     ids = out(*AC, "propose", "--previews", work / "previews", "--rawdir", raw, "--min-rating", n, "--out", props).splitlines()
     if not ids: print("nothing to propose"); return
+    asshot(raw, work / "asshot", ids)
+    if look and amount != 1: look = scaled(look, amount, work)
     # stage RAW clones + edited sidecars and render them with the real engine: the sheet shows what apply writes
     stage, after = work / "stage", work / "after"  # a symlinked CR3 would save the copy, but Photoshop refuses to open one
     for d in (stage, after): shutil.rmtree(d, ignore_errors=True)  # a killed run's stage too
     stage.mkdir()
-    try:
-        for i in ids:
-            clone(raw / f"{i}.CR3", stage); shutil.copy(raw / f"{i}.xmp", stage)
+    def fresh(ids):  # the sidecars as apply will find them -- lens correction moves what Level finds -- plus the proposals
+        for i in ids: shutil.copy(raw / f"{i}.xmp", stage)
+        if look: write_look(look, [stage / f"{i}.xmp" for i in ids])
         run(*AC, "write", "--proposals", props, "--xmpdir", stage, stdout=subprocess.DEVNULL)
+    try:
+        for i in ids: clone(raw / f"{i}.CR3", stage)
+        fresh(ids)
         render(after, 1600, 8, [stage / f"{i}.CR3" for i in ids])
+        # Level stays only where it measurably levels the frame; crops that lose it render again without it
+        redo = out(*AC, "level", "--proposals", props, "--before", work / "asshot", "--after", after).splitlines()
+        if redo:
+            fresh(redo)
+            render(after, 1600, 8, [stage / f"{i}.CR3" for i in redo])
     finally: shutil.rmtree(stage)  # even when a render fails: across volumes, clones are full copies
+    p = json.loads(props.read_text()).values()
+    print(f"\n{sum(v['level'] for v in p)} to straighten, {sum(bool(v['crop']) for v in p)} to crop, "
+          f"{sum(not (v['level'] or v['crop']) for v in p)} left as shot (why: {props})")
     for f in work.glob("sheet*.jpg"): f.unlink()  # a rerun with fewer pages leaves none behind
     sheets = out(*AC, "sheet", "--proposals", props, "--before", work / "previews", "--after", after,
                  "--out", work / "sheet.jpg").splitlines()
-    print(f"\nreview: {'  '.join(sheets)}\n(left = as shot, right = proposed result with thirds grid)")
+    if sheets: print(f"review: {'  '.join(sheets)}\n(left = as shot, cropped-off part dimmed; right = proposed result with thirds grid)")
 
 def apply(raw, work, dest):
     props = work / "proposals.json"
@@ -206,7 +288,7 @@ def selftest():
         look.write_text(xmp('xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:PresetType="Normal" '
                             'crs:Contrast2012="+20" crs:ColorVariance="7"'))
         orig = {f.name: f.read_bytes() for f in raw.iterdir()}
-        preset(raw, work, look, 4); preset(raw, work, look, 4)  # a rerun changes nothing and keeps the first backup
+        preset(raw, work, look, 4, 1); preset(raw, work, look, 4, 1)  # a rerun changes nothing and keeps the first backup
         a = (raw / "a.xmp").read_text()
         assert "crs:Contrast2012" in a and "crs:LensProfileEnable" in a and "PresetType" not in a, a
         assert a.count("<crs:ColorVariance>7</crs:ColorVariance>") == 1, a
@@ -215,8 +297,22 @@ def selftest():
         el, copy = Path(t) / "el", Path(t) / "copy.xmp"  # a preset copy saved by exiftool has elements, not attributes
         el.mkdir(); (el / "d.xmp").write_text(xmp(rating(5)))
         run("exiftool", "-q", "-o", copy, "-XMP-crs:PresetType=", look)
-        preset(el, work, copy, 4)
+        preset(el, work, copy, 4, 1)
         assert "<crs:ColorVariance>7</crs:ColorVariance>" in (el / "d.xmp").read_text()
+        strong = Path(t) / "strong.xmp"  # half strength; the shadow lift stays, curves halve toward the straight line
+        strong.write_text(xmp('xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Version="+18.4" '
+                              'crs:Contrast2012="-15" crs:Shadows2012="+36" crs:ParametricDarks="+16" crs:Highlights2012="-32" '
+                              'crs:Vibrance="+16" crs:Sharpness="29" crs:SharpenRadius="+1.4" crs:PostCropVignetteRoundness="-19" '
+                              'crs:Temperature="5500" crs:LensProfileEnable="1"')
+                          .replace("/></rdf:RDF>", '><crs:Saturation>-10</crs:Saturation><crs:ToneCurvePV2012Red><rdf:Seq>'
+                                   '<rdf:li>0, 0</rdf:li><rdf:li>45, 20</rdf:li></rdf:Seq></crs:ToneCurvePV2012Red>'
+                                   '</rdf:Description></rdf:RDF>'))
+        half = scaled(strong, 0.5, work).read_text()
+        for s in ('Version="+18.4"', 'Contrast2012="-15"', 'Shadows2012="+36"', 'ParametricDarks="+16"', 'Highlights2012="-16"',
+                  'Vibrance="+8"', 'Sharpness="29"', 'SharpenRadius="+1.4"', 'PostCropVignetteRoundness="-10"',
+                  'Temperature="5500"', 'LensProfileEnable="1"', "<crs:Saturation>-5</crs:Saturation>", "<rdf:li>45, 32</rdf:li>"):
+            assert s in half, (s, half)
+        assert 'Contrast2012="+10"' in scaled(look, 0.5, work).read_text()  # a punchy preset's contrast does scale
         frames = Path(t) / "tiers.json"
         frames.write_text('{"tier1_must_have": [{"id": "a"}, {"id": "gone"}]}')
         for _ in range(2): tag(raw, work, frames, "tier1_must_have", "cull/must_have", False)  # rerun: listed once
@@ -232,13 +328,15 @@ def selftest():
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     jobs = ap.add_subparsers(dest="job", required=True)
-    for job, args in (("preset", "rawdir look min"), ("crop", "rawdir min"), ("apply", "rawdir outdir"),
+    for job, args in (("look", "rawdir look min amount"), ("preset", "rawdir look min amount"), ("crop", "rawdir min look? amount"), ("apply", "rawdir outdir"),
                       ("export", "rawdir outdir min"), ("previews", "rawdir"), ("decode", "rawdir ids"),
                       ("keyword", "rawdir frames key value"), ("label", "rawdir frames key value"),
                       ("models", ""), ("selftest", "")):
         p = jobs.add_parser(job)
         for arg in args.split():
             if arg == "min": p.add_argument("min", type=int, nargs="?", default=4, help="lowest rating (default 4)")
+            elif arg == "amount": p.add_argument("amount", type=float, nargs="?", default=0.5, help="look strength, 1 = full (default 0.5)")
+            elif arg == "look?": p.add_argument("look", type=Path, nargs="?", help="the preset `preset` will write after this")
             elif arg == "ids": p.add_argument("ids", nargs="+")
             elif arg in ("key", "value"): p.add_argument(arg)
             else: p.add_argument(arg, type=Path)
@@ -249,8 +347,9 @@ if __name__ == "__main__":
     if not raw.is_dir(): sys.exit(f"not a folder: {a.rawdir}")
     work = workdir(raw)
     dest = a.outdir.resolve() if "outdir" in a else None  # absolute: Photoshop would resolve a relative one elsewhere
-    if a.job == "preset": preset(raw, work, a.look, a.min)
-    elif a.job == "crop": crop(raw, work, a.min)
+    if a.job == "look": look(raw, work, a.look, a.min, a.amount)
+    elif a.job == "preset": preset(raw, work, a.look, a.min, a.amount)
+    elif a.job == "crop": crop(raw, work, a.min, a.look, a.amount)
     elif a.job == "apply": apply(raw, work, dest)
     elif a.job == "export": export(raw, dest, a.min)
     elif a.job == "previews": previews(raw, work)
