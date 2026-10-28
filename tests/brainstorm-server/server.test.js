@@ -150,6 +150,14 @@ async function runTests() {
       'Server should process the barrier file');
   }
 
+  // settleWatcher waits on the server's stdout, but the server writes each
+  // reload to the sockets right after that log line, so a reload can still be
+  // in flight when it returns. The server answers a ping on the same socket,
+  // behind everything it already sent there.
+  function flushSocket(ws) {
+    return new Promise(resolve => { ws.once('pong', resolve); ws.ping(); });
+  }
+
   let initialStdout = '';
   let passed = 0;
   let failed = 0;
@@ -535,6 +543,7 @@ async function runTests() {
 
       fs.writeFileSync(path.join(CONTENT_DIR, 'data.txt'), 'not html');
       await settleWatcher();
+      await flushSocket(ws);
 
       // The only reload is the one for settleWatcher's own file.
       assert.strictEqual(reloads, 1, 'Should NOT reload for non-HTML files');
@@ -553,6 +562,7 @@ async function runTests() {
 
       fs.writeFileSync(path.join(CONTENT_DIR, '._sidecar.html'), 'resource fork');
       await settleWatcher();
+      await flushSocket(ws);
 
       // The only reload is the one for settleWatcher's own file.
       assert.strictEqual(reloads, 1, 'a ._ dotfile appearing must not trigger a reload');
