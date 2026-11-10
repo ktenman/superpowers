@@ -23,3 +23,5 @@ implementation and the simplification as one diff.
 
 **Model:** judgment work over one small diff — mid-tier, never above the
 reviewer that follows it.
+
+Template: [simplifier-prompt.md](../simplifier-prompt.md)
