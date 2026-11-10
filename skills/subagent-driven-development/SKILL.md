@@ -242,7 +242,7 @@ Template: [implementer-prompt.md](implementer-prompt.md)
 
 Implementer subagents report one of four statuses. Handle each appropriately:
 
-**DONE:** Dispatch the simplify pass with the BASE you recorded before dispatching the implementer and the implementer's HEAD.
+**DONE:** Dispatch the simplify pass with your recorded BASE and the implementer's HEAD.
 
 **Any other status** (DONE_WITH_CONCERNS, NEEDS_CONTEXT, BLOCKED): read
 [references/handling-reports.md](references/handling-reports.md) and follow
@@ -256,8 +256,6 @@ rush it into implementation.
 
 Before dispatching the simplifier, read
 [references/simplify-pass.md](references/simplify-pass.md) and follow it.
-
-Template: [simplifier-prompt.md](simplifier-prompt.md)
 
 ### 4. Review the task
 
