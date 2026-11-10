@@ -99,7 +99,8 @@ Subagent (general-purpose):
 
 **Placeholders:**
 - `[MODEL]` — REQUIRED: simplifier model per references/simplify-pass.md
-- `[BRIEF_FILE]` — REQUIRED: the task brief file (`bash scripts/task-brief PLAN N`
+- `[BRIEF_FILE]` — REQUIRED: the task brief file (`bash scripts/task-brief PLAN N`,
+  run by its absolute path, from the working tree you're executing in,
   prints the path; same file the implementer worked from)
 - `[REPORT_FILE]` — REQUIRED: the file the implementer wrote its report to;
   the simplify report is appended to the same file
